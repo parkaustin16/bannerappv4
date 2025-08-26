@@ -202,6 +202,19 @@ def _ensure_per_image_zone_containers(img_key: Optional[str]):
     except Exception:
         pass
 
+# Safe setter for current_edit_image to avoid mutating a live widget key
+def _safe_set_current_edit_image(name: str):
+    try:
+        if not st.session_state.get("_edit_image_widget_instantiated"):
+            st.session_state["current_edit_image"] = name
+        else:
+            st.session_state["_pending_edit_image"] = name
+            st.rerun()
+    except Exception:
+        # As a fallback, set pending and rerun on next cycle
+        st.session_state["_pending_edit_image"] = name
+        st.rerun()
+
 # --- Zone Management Functions ---
 def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
     """Add a new text zone."""
@@ -698,6 +711,7 @@ def render_sidebar():
                 options=options_names,
                 key="current_edit_image",
             )
+            st.session_state["_edit_image_widget_instantiated"] = True
             active_img = selected
             _ensure_per_image_zone_containers(selected)
         else:
@@ -951,6 +965,11 @@ def render_process_mode():
             # clear previous cached image when a new set is uploaded
             st.session_state._cached_img_bytes = None
             st.session_state._cached_img_name = None
+            try:
+                first_name = uploaded_files[0].name
+                st.session_state["_pending_edit_image"] = first_name
+            except Exception:
+                pass
 
         # Auto-process images when uploaded
         if len(uploaded_files) != len(st.session_state.batch_results) or not st.session_state.batch_results:
@@ -976,8 +995,9 @@ def render_process_mode():
                     raw_bytes = raw_buf.getvalue()
                     st.session_state["_cached_img_bytes"] = raw_bytes
                     st.session_state["_cached_img_name"] = uploaded_file.name
-                    # set current edit target to this file while processing
-                    st.session_state["current_edit_image"] = uploaded_file.name
+                    # do not mutate dropdown-bound key in the same run; defer
+                    if "_pending_edit_image" not in st.session_state:
+                        st.session_state["_pending_edit_image"] = uploaded_file.name
                     # ensure per-image containers exist seeded from current defaults
                     _ensure_per_image_zone_containers(uploaded_file.name)
                     cached_batch.append({"bytes": raw_bytes, "name": uploaded_file.name})
@@ -1012,9 +1032,10 @@ def render_process_mode():
                 st.metric("Infractions", len(result["penalties"]))
                 st.metric("Processing Time", f"{result['processing_time']:.2f}s")
                 st.metric("Aspect Ratio", f"{result['aspect_ratio']:.2f}")
-                # Ensure per-image containers for single image and set edit target
+                # Ensure per-image containers for single image and defer selection
                 _ensure_per_image_zone_containers(result["filename"]) 
-                st.session_state["current_edit_image"] = result["filename"]
+                if "_pending_edit_image" not in st.session_state:
+                    st.session_state["_pending_edit_image"] = result["filename"]
 
             # Display penalties
             if result["penalties"]:
@@ -1119,13 +1140,12 @@ def render_process_mode():
                 for idx, name in enumerate(names):
                     with cols[idx % len(cols)]:
                         if st.button(name, key=f"img_switch_btn_{name}"):
-                            st.session_state["_pending_edit_image"] = name
+                            _safe_set_current_edit_image(name)
                             _ensure_per_image_zone_containers(name)
                             try:
                                 _reprocess_from_cache()
                             except Exception:
                                 pass
-                            st.rerun()
 
             # Render only the active image panel
             active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)
