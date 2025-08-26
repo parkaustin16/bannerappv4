@@ -1239,7 +1239,7 @@ def main():
 
         # Render sidebar
         render_sidebar()
-
+        #1
         # Render main content based on mode
         if st.session_state.current_mode == "process":
             render_process_mode()
