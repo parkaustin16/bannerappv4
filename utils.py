@@ -8,6 +8,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import base64
+from reportlab.lib.utils import ImageReader
+
 
 # --- File Operations ---
 def load_json_cached(file_path: str, default_value: Any) -> Any:
@@ -31,6 +33,7 @@ def load_json_cached(file_path: str, default_value: Any) -> Any:
                 return default_value
     return default_value
 
+
 def save_json(file_path: str, data: Any) -> bool:
     """Save JSON file with error handling."""
     try:
@@ -41,19 +44,23 @@ def save_json(file_path: str, data: Any) -> bool:
         st.error(f"Error saving {file_path}: {e}")
         return False
 
+
 def get_image_hash(img: Image.Image) -> str:
     """Generate a hash for the image to use as cache key."""
     img_bytes = io.BytesIO()
     img.save(img_bytes, format="PNG")
     return hashlib.md5(img_bytes.getvalue()).hexdigest()
 
+
 # --- Image Processing ---
-def validate_image_aspect_ratio(img: Image.Image, target_ratio: float = 8/3, tolerance: float = 0.01) -> Tuple[bool, float]:
+def validate_image_aspect_ratio(img: Image.Image, target_ratio: float = 8 / 3, tolerance: float = 0.01) -> Tuple[
+    bool, float]:
     """Validate image aspect ratio."""
     w, h = img.size
     aspect_ratio = w / h
     is_valid = abs(aspect_ratio - target_ratio) <= tolerance
     return is_valid, aspect_ratio
+
 
 def resize_image_for_display(img: Image.Image, max_width: int = 800) -> Image.Image:
     """Resize image for display while maintaining aspect ratio."""
@@ -65,12 +72,13 @@ def resize_image_for_display(img: Image.Image, max_width: int = 800) -> Image.Im
         return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
     return img
 
+
 def create_zone_preview_image(img: Image.Image, zones: List[Dict], ignore_zones: List[Dict]) -> Image.Image:
     """Create a preview image with zones drawn."""
     preview_img = img.copy()
     draw = ImageDraw.Draw(preview_img)
     w, h = img.size
-    
+
     # Draw text zones (green)
     for zone in zones:
         name = zone.get("name", "Unnamed")
@@ -78,7 +86,7 @@ def create_zone_preview_image(img: Image.Image, zones: List[Dict], ignore_zones:
         x, y, w_abs, h_abs = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
         draw.rectangle([x, y, x + w_abs, y + h_abs], outline="green", width=2)
         draw.text((x + 5, y + 5), name, fill="green")
-    
+
     # Draw ignore zones (blue)
     for zone in ignore_zones:
         name = zone.get("name", "Unnamed")
@@ -86,26 +94,28 @@ def create_zone_preview_image(img: Image.Image, zones: List[Dict], ignore_zones:
         x, y, w_abs, h_abs = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
         draw.rectangle([x, y, x + w_abs, y + h_abs], outline="blue", width=2)
         draw.text((x + 5, y + 5), name, fill="blue")
-    
+
     return preview_img
+
 
 # --- Geometry Utilities ---
 def overlap_ratio(text_box: Tuple[int, int, int, int], zone_box: Tuple[int, int, int, int]) -> float:
     """Calculate overlap ratio between text box and zone box."""
     tx, ty, tw, th = text_box
     zx, zy, zw, zh = zone_box
-    
+
     inter_x1 = max(tx, zx)
     inter_y1 = max(ty, zy)
     inter_x2 = min(tx + tw, zx + zw)
     inter_y2 = min(ty + th, zy + zh)
-    
+
     if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
         return 0.0
-    
+
     inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
     text_area = tw * th
     return inter_area / text_area if text_area > 0 else 0.0
+
 
 def convert_ocr_bbox_to_rect(bbox) -> Tuple[int, int, int, int]:
     """Convert OCR bounding box to rectangle format."""
@@ -114,13 +124,18 @@ def convert_ocr_bbox_to_rect(bbox) -> Tuple[int, int, int, int]:
     tx, ty, tw, th = min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
     return tx, ty, tw, th
 
-def normalize_coordinates(x: float, y: float, w: float, h: float, img_width: int, img_height: int) -> Tuple[float, float, float, float]:
+
+def normalize_coordinates(x: float, y: float, w: float, h: float, img_width: int, img_height: int) -> Tuple[
+    float, float, float, float]:
     """Convert absolute coordinates to normalized (0-1) coordinates."""
     return x / img_width, y / img_height, w / img_width, h / img_height
 
-def denormalize_coordinates(nx: float, ny: float, nw: float, nh: float, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
+
+def denormalize_coordinates(nx: float, ny: float, nw: float, nh: float, img_width: int, img_height: int) -> Tuple[
+    int, int, int, int]:
     """Convert normalized (0-1) coordinates to absolute coordinates."""
     return int(nx * img_width), int(ny * img_height), int(nw * img_width), int(nh * img_height)
+
 
 # --- Export Functions ---
 def generate_csv_report(results: List[Dict]) -> str:
@@ -135,89 +150,290 @@ def generate_csv_report(results: List[Dict]) -> str:
             'Processing Time': result.get('processing_time', 0),
             'Timestamp': result.get('timestamp', '')
         })
-    
+
     df = pd.DataFrame(df_data)
     csv = df.to_csv(index=False)
     return csv
 
+
 def generate_pdf_report(results: List[Dict]) -> bytes:
-    """Generate PDF report from batch processing results."""
+    """Generate a PDF report with a layout inspired by the provided reference.
+
+    Page layout (per image):
+    - Top tag-style header with the filename
+    - Two-column body: annotated image on the left, metrics + infractions on the right
+    - A blue "Place disclaimer here" button-like callout below the image
+    - A dark guideline panel with the six rules at the bottom of the page
+    """
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.platypus import (
+            SimpleDocTemplate,
+            Table,
+            TableStyle,
+            Paragraph,
+            Spacer,
+            Image as RLImage,
+            PageBreak,
+            Flowable,
+        )
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib import colors
-        
+
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=landscape(letter),
+            leftMargin=36,
+            rightMargin=36,
+            top=28,
+            bottom=28,
+        )
         elements = []
         styles = getSampleStyleSheet()
-        
-        # Title
-        title = Paragraph("Banner QA Report", styles['Title'])
-        elements.append(title)
-        elements.append(Spacer(1, 12))
-        
-        # Summary
-        total_images = len(results)
-        avg_score = sum(r.get('score', 0) for r in results) / total_images if total_images > 0 else 0
-        total_infractions = sum(len(r.get('penalties', [])) for r in results)
-        
-        summary_data = [
-            ['Metric', 'Value'],
-            ['Total Images Processed', str(total_images)],
-            ['Average Score', f"{avg_score:.1f}%"],
-            ['Total Infractions', str(total_infractions)],
-            ['Report Generated', datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+
+        # Custom styles
+        tag_style = ParagraphStyle(
+            name='Tag', parent=styles['BodyText'], textColor=colors.white, alignment=0,
+            fontSize=10, leading=12
+        )
+        rule_style = ParagraphStyle(
+            name='Rule', parent=styles['BodyText'], textColor=colors.white, fontSize=9, leading=12
+        )
+        small_style = ParagraphStyle(
+            name='Small', parent=styles['BodyText'], fontSize=9, leading=11
+        )
+
+        # Intro page: Color Key only
+        key_data = [
+            ['Green', 'Defined text zone or allowed text (valid - inside zone)'],
+            ['Blue', 'Defined ignored zones or ignored text'],
+            ['Red', 'Unallowed text (infraction - outside zone)'],
         ]
-        
-        summary_table = Table(summary_data)
-        summary_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 14),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        key_table = Table(key_data, colWidths=[120, 500])
+        key_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+            ('TEXTCOLOR', (0, 0), (0, 0), colors.green),
+            ('TEXTCOLOR', (0, 1), (0, 1), colors.blue),
+            ('TEXTCOLOR', (0, 2), (0, 2), colors.red),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
         ]))
-        elements.append(summary_table)
-        elements.append(Spacer(1, 12))
-        
-        # Detailed results
-        if results:
-            detail_data = [['Filename', 'Score', 'Infractions', 'Aspect Ratio']]
-            for result in results:
-                detail_data.append([
-                    result.get('filename', 'Unknown'),
-                    f"{result.get('score', 0)}%",
-                    str(len(result.get('penalties', []))),
-                    '✓' if result.get('aspect_ratio_valid', False) else '✗'
-                ])
-            
-            detail_table = Table(detail_data)
-            detail_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        elements.append(Paragraph('Color Key', styles['Title']))
+        elements.append(Spacer(1, 16))
+        elements.append(key_table)
+        elements.append(PageBreak())
+
+        # Rounded infractions panel Flowable
+        class InfractionsPanel(Flowable):
+            def __init__(self, lines, width):
+                super().__init__()
+                self.lines = lines
+                self.width = width
+                self.padding = 10
+                self.line_height = 13
+                self.radius = 10
+                self.bg = colors.HexColor('#343a40')
+                self.text_color = colors.white
+
+            def wrap(self, availWidth, availHeight):
+                total_lines = max(1, len(self.lines) + 1)  # title + lines
+                self._height = self.padding * 2 + self.line_height * total_lines
+                return self.width, self._height
+
+            def draw(self):
+                c = self.canv
+                w = self.width
+                h = getattr(self, '_height', 60)
+                c.saveState()
+                c.setFillColor(self.bg)
+                c.setStrokeColor(self.bg)
+                try:
+                    c.roundRect(0, 0, w, h, self.radius, stroke=0, fill=1)
+                except Exception:
+                    c.rect(0, 0, w, h, stroke=0, fill=1)
+                c.setFillColor(self.text_color)
+                y = h - self.padding - self.line_height
+                c.setFont('Helvetica-Bold', 12)
+                c.drawString(self.padding, y, 'Infractions')
+                c.setFont('Helvetica', 10)
+                y -= self.line_height
+                for line in self.lines:
+                    if y <= self.padding:
+                        break
+                    c.drawString(self.padding, y, line)
+                    y -= self.line_height
+                c.restoreState()
+
+        for idx, result in enumerate(results, start=1):
+            if idx > 1:
+                elements.append(PageBreak())
+
+            # Header tag styled via a single-cell table
+            filename = result.get('filename', 'Unknown')
+            tag_text = f"Hero Banner {idx:02d} - {filename}"
+            tag = Table([[Paragraph(tag_text, tag_style)]], colWidths=[240])
+            tag.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#6c757d')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ]))
-            elements.append(detail_table)
-        
+            elements.append(tag)
+            elements.append(Spacer(1, 8))
+
+            # Build left image cell
+            left_flowables = []
+            try:
+                img = result.get('annotated_image')
+                if img is not None:
+                    img_buf = io.BytesIO()
+                    img.save(img_buf, format='PNG')
+                    img_buf.seek(0)
+                    # Target width for left column (roughly 65% of content width)
+                    target_w = (doc.width * 0.65)
+                    iw, ih = img.size
+                    scale = min(1.0, target_w / float(iw))
+                    rl_image = RLImage(img_buf, width=iw * scale, height=ih * scale)
+                    left_flowables.append(rl_image)
+            except Exception:
+                pass
+
+            # Removed blue disclaimer callout per request
+
+            # Right panel with metrics + infractions
+            metrics_data = [
+                ['Score', f"{result.get('score', 0)}%"],
+                ['Infractions', str(len(result.get('penalties', [])))],
+                ['Aspect Ratio', f"{float(result.get('aspect_ratio', 0.0)):.2f}"],
+                ['Processing Time', f"{float(result.get('processing_time', 0.0)):.2f}s"],
+            ]
+            metrics_tbl = Table(metrics_data, colWidths=[110, 120])
+            metrics_tbl.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+
+            # Right panel now ONLY metrics (no infractions on the right)
+            right_panel = [metrics_tbl]
+            right_tbl = Table([[v] for v in right_panel], colWidths=[doc.width * 0.30])
+            right_tbl.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+
+            # Two-column layout: image left, panel right
+            body_tbl = Table(
+                [[left_flowables, right_tbl]],
+                colWidths=[doc.width * 0.65, doc.width * 0.30],
+            )
+            body_tbl.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            elements.append(body_tbl)
+            elements.append(Spacer(1, 12))
+
+            # Full-width infractions panel with dark gray rounded rectangle and white text
+            detailed_penalties = result.get('penalties', [])
+            lines = []
+            if detailed_penalties:
+                for p in detailed_penalties:
+                    try:
+                        if len(p) == 3:
+                            msg, txt, pts = p
+                        else:
+                            msg, pts = p
+                            txt = ''
+                        line = msg
+                        if txt:
+                            line += f" – '{txt}'"
+                        line += f" ({pts})"
+                        lines.append(line)
+                    except Exception:
+                        continue
+            else:
+                lines.append('No infractions – perfect score.')
+
+            elements.append(InfractionsPanel(lines, doc.width))
+
         doc.build(elements)
         return buffer.getvalue()
     except ImportError:
         st.error("ReportLab not installed. Install with: pip install reportlab")
         return b""
 
+
+def generate_excel_report(results: List[Dict]) -> bytes:
+    """Generate an Excel (.xlsx) report with a summary sheet and embedded annotated images."""
+    try:
+        import xlsxwriter
+        output = io.BytesIO()
+        wb = xlsxwriter.Workbook(output, {'in_memory': True})
+        ws = wb.add_worksheet('Summary')
+
+        # Header
+        headers = ['Filename', 'Score', 'Infractions', 'Aspect Ratio', 'Processing Time (s)']
+        for col, h in enumerate(headers):
+            ws.write(0, col, h)
+
+        # Rows
+        for row, result in enumerate(results, start=1):
+            ws.write(row, 0, result.get('filename', 'Unknown'))
+            ws.write(row, 1, result.get('score', 0))
+            ws.write(row, 2, len(result.get('penalties', [])))
+            ws.write(row, 3, result.get('aspect_ratio', 0.0))
+            ws.write(row, 4, float(result.get('processing_time', 0.0)))
+
+        # Create an Images sheet and insert each annotated image
+        ws_img = wb.add_worksheet('Images')
+        row_cursor = 0
+        for idx, result in enumerate(results, start=1):
+            ws_img.write(row_cursor, 0, f"{idx}. {result.get('filename', 'Unknown')}")
+            try:
+                img = result.get('annotated_image')
+                if img is not None:
+                    # Convert to PNG bytes
+                    img_buf = io.BytesIO()
+                    img.save(img_buf, format='PNG')
+                    img_buf.seek(0)
+                    # Insert image with scaling if too wide
+                    max_width_px = 1000  # reasonable width for Excel
+                    iw, ih = img.size
+                    scale = 1.0
+                    if iw > max_width_px:
+                        scale = max_width_px / float(iw)
+                    ws_img.insert_image(row_cursor + 1, 0, 'annotated.png', {
+                        'image_data': img_buf,
+                        'x_scale': scale,
+                        'y_scale': scale
+                    })
+                    # Advance cursor by image height in rows (~20 px/row)
+                    row_cursor += int((ih * scale) / 20) + 4
+                else:
+                    row_cursor += 2
+            except Exception:
+                row_cursor += 2
+
+        wb.close()
+        output.seek(0)
+        return output.getvalue()
+    except ImportError:
+        st.error("XlsxWriter not installed. Install with: pip install XlsxWriter")
+        return b""
+
+
 def get_download_link(data: bytes, filename: str, text: str) -> str:
     """Generate a download link for files."""
     b64 = base64.b64encode(data).decode()
     return f'<a href="data:file/{filename.split(".")[-1]};base64,{b64}" download="{filename}">{text}</a>'
+
 
 # --- Template Management ---
 def load_templates() -> Dict[str, Dict]:
@@ -262,6 +478,7 @@ def load_templates() -> Dict[str, Dict]:
     }
     return templates
 
+
 def apply_template(template_name: str) -> Tuple[List[Dict], List[Dict], List[str]]:
     """Apply a template configuration."""
     templates = load_templates()
@@ -274,12 +491,13 @@ def apply_template(template_name: str) -> Tuple[List[Dict], List[Dict], List[str
         )
     return [], [], []
 
+
 # --- Analytics ---
 def save_analytics_data(result: Dict):
     """Save analytics data for tracking performance over time."""
     analytics_file = "analytics.json"
     analytics = load_json_cached(analytics_file, [])
-    
+
     analytics_entry = {
         "timestamp": datetime.now().isoformat(),
         "filename": result.get("filename", "Unknown"),
@@ -290,20 +508,21 @@ def save_analytics_data(result: Dict):
         "image_size": result.get("image_size", (0, 0)),
         "zones_used": result.get("zones_used", 0)
     }
-    
+
     analytics.append(analytics_entry)
-    
+
     # Keep only last 1000 entries to prevent file from growing too large
     if len(analytics) > 1000:
         analytics = analytics[-1000:]
-    
+
     save_json(analytics_file, analytics)
+
 
 def get_analytics_summary() -> Dict:
     """Get analytics summary for dashboard."""
     analytics_file = "analytics.json"
     analytics = load_json_cached(analytics_file, [])
-    
+
     if not analytics:
         return {
             "total_processed": 0,
@@ -312,13 +531,14 @@ def get_analytics_summary() -> Dict:
             "success_rate": 0,
             "avg_processing_time": 0
         }
-    
+
     total_processed = len(analytics)
     avg_score = sum(entry.get("score", 0) for entry in analytics) / total_processed
-    total_infractions = sum(entry.get("infractions", 0) for entry in analytics)  # Use infractions field instead of penalties
+    total_infractions = sum(
+        entry.get("infractions", 0) for entry in analytics)  # Use infractions field instead of penalties
     success_rate = sum(1 for entry in analytics if entry.get("score", 0) == 100) / total_processed * 100
     avg_processing_time = sum(entry.get("processing_time", 0) for entry in analytics) / total_processed
-    
+
     return {
         "total_processed": total_processed,
         "avg_score": round(avg_score, 1),

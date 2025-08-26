@@ -26,6 +26,26 @@ st.set_page_config(
     page_icon="🎯"
 )
 
+# --- Sidebar Button Styling (standardized and auto-fit text) ---
+st.markdown("""
+<style>
+/* Sidebar buttons: st.button and st.download_button */
+section[data-testid="stSidebar"] div.stButton > button,
+section[data-testid="stSidebar"] div.stDownloadButton > button {
+  width: 100% !important;          /* fill the sidebar width */
+  min-height: 48px !important;     /* comfortable tap target */
+  padding: 10px 14px !important;   /* balanced padding */
+  line-height: 1.2 !important;     /* better multi-line readability */
+  white-space: normal !important;  /* allow wrapping */
+  overflow: visible !important;    /* show full content */
+  text-overflow: unset !important; /* no ellipsis */
+}
+/* Consistent spacing between buttons */
+section[data-testid="stSidebar"] div.stButton { margin-bottom: 8px; }
+section[data-testid="stSidebar"] div.stDownloadButton { margin-bottom: 8px; }
+</style>
+""", unsafe_allow_html=True)
+
 # --- Configuration Constants ---
 IGNORE_FILE = "ignore_terms.json"
 IGNORE_ZONES_FILE = "ignore_zones.json"
@@ -76,6 +96,15 @@ def initialize_session_state():
 
         if "batch_results" not in st.session_state:
             st.session_state.batch_results = []
+        # Per-image zones store
+        if "zones_by_image" not in st.session_state:
+            st.session_state.zones_by_image = {}
+        if "ignore_zones_by_image" not in st.session_state:
+            st.session_state.ignore_zones_by_image = {}
+        if "current_edit_image" not in st.session_state:
+            st.session_state.current_edit_image = None
+        if "_hidden_zone_ids_by_image" not in st.session_state:
+            st.session_state._hidden_zone_ids_by_image = {}
 
         # Track uploads to reset zones per image upload
         if "_last_upload_signatures" not in st.session_state:
@@ -88,13 +117,12 @@ def initialize_session_state():
             st.session_state._cached_img_name = None
         if "_hidden_zone_indices" not in st.session_state:
             st.session_state._hidden_zone_indices = set()
-        if "_default_zone_signatures" not in st.session_state:
+        # Track default zones by object id so edits to coordinates don't change default status
+        if "_default_zone_ids" not in st.session_state:
             try:
-                st.session_state._default_zone_signatures = set(
-                    (z.get("name", ""), tuple(z.get("zone", (0,0,0,0)))) for z in st.session_state.text_zones_default
-                )
+                st.session_state._default_zone_ids = set(id(item) for item in st.session_state.text_zones)
             except Exception:
-                st.session_state._default_zone_signatures = set()
+                st.session_state._default_zone_ids = set()
 
         if "current_mode" not in st.session_state:
             st.session_state.current_mode = "process"
@@ -122,17 +150,37 @@ def initialize_session_state():
         st.session_state.show_analytics = False
 
 
+# Helper to initialize per-image containers from current session defaults
+def _ensure_per_image_zone_containers(img_key: Optional[str]):
+    if not img_key:
+        return
+    try:
+        if img_key not in st.session_state.zones_by_image:
+            st.session_state.zones_by_image[img_key] = list(st.session_state.text_zones)
+        if img_key not in st.session_state.ignore_zones_by_image:
+            st.session_state.ignore_zones_by_image[img_key] = list(st.session_state.ignore_zones)
+    except Exception:
+        pass
+
 # --- Zone Management Functions ---
 def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
     """Add a new text zone."""
     try:
-        zones_list = st.session_state.text_zones.copy()
+        # Determine target list (per-image if selected)
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.text_zones.copy()
         # Use float() to ensure we have valid numbers, avoid rounding issues
         zones_list.append({
             "name": name,
             "zone": (float(x), float(y), float(w), float(h))
         })
-        st.session_state.text_zones = zones_list
+        if img_key:
+            st.session_state.zones_by_image[img_key] = zones_list
+        else:
+            st.session_state.text_zones = zones_list
         try:
             _reprocess_from_cache()
         except Exception:
@@ -146,10 +194,17 @@ def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
 def delete_text_zone(index: int) -> bool:
     """Delete a text zone by index."""
     try:
-        zones_list = st.session_state.text_zones.copy()
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.text_zones.copy()
         if 0 <= index < len(zones_list):
             zones_list.pop(index)
-            st.session_state.text_zones = zones_list
+            if img_key:
+                st.session_state.zones_by_image[img_key] = zones_list
+            else:
+                st.session_state.text_zones = zones_list
             try:
                 _reprocess_from_cache()
             except Exception:
@@ -164,7 +219,11 @@ def delete_text_zone(index: int) -> bool:
 def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool:
     """Update an existing text zone by index with clamped normalized values."""
     try:
-        zones_list = st.session_state.text_zones.copy()
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.text_zones.copy()
         if 0 <= index < len(zones_list):
             # clamp values
             x = float(max(0.0, min(1.0, x)))
@@ -174,7 +233,10 @@ def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool
             if x + w > 1.0:
                 w = max(0.0, 1.0 - x)
             zones_list[index]["zone"] = (x, y, w, h)
-            st.session_state.text_zones = zones_list
+            if img_key:
+                st.session_state.zones_by_image[img_key] = zones_list
+            else:
+                st.session_state.text_zones = zones_list
             try:
                 _reprocess_from_cache()
             except Exception:
@@ -189,13 +251,20 @@ def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool
 def add_ignore_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
     """Add a new ignore zone."""
     try:
-        zones_list = st.session_state.ignore_zones.copy()
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.ignore_zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.ignore_zones.copy()
         # Use float() to ensure we have valid numbers, avoid rounding issues
         zones_list.append({
             "name": name,
             "zone": (float(x), float(y), float(w), float(h))
         })
-        st.session_state.ignore_zones = zones_list
+        if img_key:
+            st.session_state.ignore_zones_by_image[img_key] = zones_list
+        else:
+            st.session_state.ignore_zones = zones_list
         try:
             _reprocess_from_cache()
         except Exception:
@@ -209,10 +278,17 @@ def add_ignore_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
 def delete_ignore_zone(index: int) -> bool:
     """Delete an ignore zone by index."""
     try:
-        zones_list = st.session_state.ignore_zones.copy()
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.ignore_zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.ignore_zones.copy()
         if 0 <= index < len(zones_list):
             zones_list.pop(index)
-            st.session_state.ignore_zones = zones_list
+            if img_key:
+                st.session_state.ignore_zones_by_image[img_key] = zones_list
+            else:
+                st.session_state.ignore_zones = zones_list
             try:
                 _reprocess_from_cache()
             except Exception:
@@ -227,7 +303,11 @@ def delete_ignore_zone(index: int) -> bool:
 def update_ignore_zone(index: int, x: float, y: float, w: float, h: float) -> bool:
     """Update an existing ignore zone by index with clamped normalized values."""
     try:
-        zones_list = st.session_state.ignore_zones.copy()
+        img_key = st.session_state.get("current_edit_image")
+        if img_key:
+            zones_list = list(st.session_state.ignore_zones_by_image.get(img_key, []))
+        else:
+            zones_list = st.session_state.ignore_zones.copy()
         if 0 <= index < len(zones_list):
             x = float(max(0.0, min(1.0, x)))
             w = float(max(0.0, min(1.0, w)))
@@ -236,7 +316,10 @@ def update_ignore_zone(index: int, x: float, y: float, w: float, h: float) -> bo
             if x + w > 1.0:
                 w = max(0.0, 1.0 - x)
             zones_list[index]["zone"] = (x, y, w, h)
-            st.session_state.ignore_zones = zones_list
+            if img_key:
+                st.session_state.ignore_zones_by_image[img_key] = zones_list
+            else:
+                st.session_state.ignore_zones = zones_list
             try:
                 _reprocess_from_cache()
             except Exception:
@@ -261,7 +344,8 @@ def add_ignore_terms(terms: List[str]) -> bool:
 
 
 # --- Image Processing ---
-def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filename: str = "Unknown", log_analytics: bool = True) -> Dict:
+def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filename: str = "Unknown",
+                  log_analytics: bool = True) -> Dict:
     """Process image with OCR and return results."""
     start_time = time.time()
     w, h = img.size
@@ -272,14 +356,20 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
     # Validate aspect ratio
     aspect_ratio_valid, aspect_ratio = validate_image_aspect_ratio(img)
 
+    # Resolve per-image zones/ignore zones if available
+    img_key = filename or st.session_state.get("_cached_img_name") or "Unknown"
+    per_image_text_zones = st.session_state.get("zones_by_image", {}).get(img_key, st.session_state.text_zones)
+    per_image_ignore_zones = st.session_state.get("ignore_zones_by_image", {}).get(img_key, st.session_state.ignore_zones)
+
     # Convert zones to absolute coordinates
     abs_ignore_zones = []
-    for item in st.session_state.ignore_zones:
+    for item in per_image_ignore_zones:
         try:
             name = item.get("name", "Ignore Zone")
             zone_data = item.get("zone", (0, 0, 0, 0))
             # Ensure we have valid numbers
             nx, ny, nw, nh = float(zone_data[0]), float(zone_data[1]), float(zone_data[2]), float(zone_data[3])
+
             ix, iy, iw, ih = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
             abs_ignore_zones.append((ix, iy, iw, ih))
             draw.rectangle([ix, iy, ix + iw, iy + ih], outline="blue", width=3)
@@ -289,11 +379,12 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
             continue
 
     # Draw text zones (respect hidden flags)
-    for item in st.session_state.text_zones:
+    hidden_ids = st.session_state._hidden_zone_ids_by_image.get(img_key, set())
+    for item in per_image_text_zones:
         try:
             name = item.get("name", "Zone")
-            # Skip hidden zones
-            if id(item) in st.session_state._hidden_zone_indices:
+            # Skip hidden zones (per-image)
+            if id(item) in hidden_ids:
                 continue
             zone_data = item.get("zone", (0, 0, 0, 0))
             # Ensure we have valid numbers
@@ -305,17 +396,17 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
             continue
 
     # Prepare image for OCR (use original image, not annotated)
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format="PNG")
-    img_bytes = img_bytes.getvalue()
+    img_bytes_io = io.BytesIO()
+    img.save(img_bytes_io, format="PNG")
+    img_bytes = img_bytes_io.getvalue()
 
     # Run OCR with caching
     image_hash = get_image_hash(img)
     results = run_ocr_cached(ocr_reader, img_bytes, image_hash)
 
-    penalties = []
+    penalties: List[Tuple[str, str, int]] = []
     score = 100
-    used_zones = {item["name"]: False for item in st.session_state.text_zones}
+    used_zones = {item["name"]: False for item in per_image_text_zones}
 
     # Process OCR results
     for (bbox, text, prob) in results:
@@ -343,14 +434,13 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
         best_ratio = 0.0
         best_zone = None
 
-        for item in st.session_state.text_zones:
+        for item in per_image_text_zones:
             try:
                 zone_name = item["name"]
                 zone_data = item["zone"]
                 # Ensure we have valid numbers
                 nx, ny, nw, nh = float(zone_data[0]), float(zone_data[1]), float(zone_data[2]), float(zone_data[3])
                 zx, zy, zw, zh = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
-
                 ratio = overlap_ratio((tx, ty, tw, th), (zx, zy, zw, zh))
                 if ratio > best_ratio:
                     best_ratio = ratio
@@ -539,6 +629,31 @@ def render_sidebar():
     """Render the sidebar with all controls."""
     try:
         st.sidebar.title("⚙️ Settings")
+        # Explicit image selector so sidebar edits always target a known image
+        options_names = []
+        try:
+            cached_batch = st.session_state.get("_cached_batch") or []
+            options_names = [entry.get("name", "") for entry in cached_batch if entry.get("name")]
+            if not options_names and st.session_state.get("batch_results"):
+                options_names = [r.get("filename", "") for r in st.session_state.batch_results]
+            options_names = [n for n in options_names if n]
+        except Exception:
+            options_names = []
+
+        default_img = st.session_state.get("current_edit_image") or (options_names[0] if options_names else None)
+        active_img = default_img
+        if options_names:
+            selected = st.sidebar.selectbox(
+                "Editing image",
+                options=options_names,
+                index=options_names.index(default_img) if default_img in options_names else 0,
+                key="_sidebar_edit_image_select",
+            )
+            active_img = selected
+            st.session_state["current_edit_image"] = selected
+            _ensure_per_image_zone_containers(selected)
+        if active_img:
+            st.sidebar.caption(f"Editing image: {active_img}")
 
         # Detection Settings
         with st.sidebar.expander("🔎 Detection Settings", expanded=False):
@@ -573,9 +688,11 @@ def render_sidebar():
                     st.rerun()
 
             # Display saved zones
-            if st.session_state.text_zones:
+            tz_list = st.session_state.zones_by_image.get(active_img, []) if active_img else st.session_state.text_zones
+            hidden_set = st.session_state._hidden_zone_ids_by_image.get(active_img, set()) if active_img else st.session_state._hidden_zone_indices
+            if tz_list:
                 st.markdown("**Current Text Zones:**")
-                for i, item in enumerate(st.session_state.text_zones):
+                for i, item in enumerate(tz_list):
                     try:
                         name = item.get("name", f"Zone {i + 1}")
                         zone_data = item.get("zone", (0, 0, 0, 0))
@@ -584,65 +701,73 @@ def render_sidebar():
                             zone_data[3])
                         st.write(f"{i + 1}. **{name}**  (x={zx:.3f}, y={zy:.3f}, w={zw:.3f}, h={zh:.3f})")
 
-                        is_default = (name, (zx, zy, zw, zh)) in st.session_state._default_zone_signatures
+                        # Default zone check by object id to keep consistent even after edits
+                        is_default = id(item) in st.session_state._default_zone_ids
 
-                        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1])
+                        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
                         with col1:
-                            hidden = id(item) in st.session_state._hidden_zone_indices
-                            if st.button("👁️ Hide" if not hidden else "👁️ Show", key=f"toggle_hide_tz_{i}"):
-                                if hidden:
-                                    st.session_state._hidden_zone_indices.discard(id(item))
+                            hidden = id(item) in hidden_set
+                            if st.button("Hide" if not hidden else "👁️ Show", key=f"toggle_hide_tz_{active_img}_{i}"):
+                                if active_img:
+                                    s = st.session_state._hidden_zone_ids_by_image.setdefault(active_img, set())
+                                    if hidden:
+                                        s.discard(id(item))
+                                    else:
+                                        s.add(id(item))
                                 else:
-                                    st.session_state._hidden_zone_indices.add(id(item))
+                                    if hidden:
+                                        st.session_state._hidden_zone_indices.discard(id(item))
+                                    else:
+                                        st.session_state._hidden_zone_indices.add(id(item))
                                 _reprocess_from_cache()
                         with col2:
-                            if st.button("✏️ Edit", key=f"edit_text_zone_{i}"):
-                                st.session_state[f"_edit_text_zone_{i}"] = True
+                            if st.button("Edit", key=f"edit_text_zone_{active_img}_{i}"):
+                                st.session_state[f"_edit_text_zone_{active_img}_{i}"] = True
                         with col3:
-                            if st.button("⬆️ Y -0.02", key=f"move_up_text_zone_{i}"):
+                            if st.button("Move Up", key=f"move_up_text_zone_{active_img}_{i}"):
                                 update_text_zone(i, zx, max(0.0, zy - 0.02), zw, zh)
                         with col4:
-                            if st.button("⬇️ Y +0.02", key=f"move_down_text_zone_{i}"):
+                            if st.button("Move Down", key=f"move_down_text_zone_{active_img}_{i}"):
                                 update_text_zone(i, zx, min(1.0 - zh, zy + 0.02), zw, zh)
                         with col5:
-                            if (not is_default) and st.button("❌ Delete", key=f"del_text_zone_{i}"):
+                            if (not is_default) and st.button("❌ Delete", key=f"del_text_zone_{active_img}_{i}"):
                                 delete_text_zone(i)
 
                         # Y-axis expand/shrink controls
                         col_e, col_f = st.columns(2)
                         with col_e:
-                            if st.button("⬆️ H +0.02", key=f"expand_text_zone_{i}"):
+                            if st.button("Size Up", key=f"expand_text_zone_{i}"):
                                 new_h = min(1.0 - zy, zh + 0.02)
                                 update_text_zone(i, zx, zy, zw, new_h)
                         with col_f:
-                            if st.button("⬇️ H -0.02", key=f"shrink_text_zone_{i}"):
+                            if st.button("Size Down", key=f"shrink_text_zone_{i}"):
                                 new_h = max(0.0, zh - 0.02)
                                 update_text_zone(i, zx, zy, zw, new_h)
 
                         # Inline edit form
-                        if st.session_state.get(f"_edit_text_zone_{i}"):
+                        if st.session_state.get(f"_edit_text_zone_{active_img}_{i}"):
                             st.markdown("Edit fields:")
                             ec1, ec2, ec3, ec4 = st.columns(4)
                             with ec1:
                                 ex = st.number_input("X", min_value=0.0, max_value=1.0, value=zx, step=0.01,
-                                                     format="%.4f", key=f"edit_tz_x_{i}")
+                                                     format="%.4f", key=f"edit_tz_x_{active_img}_{i}")
                             with ec2:
                                 ey = st.number_input("Y", min_value=0.0, max_value=1.0, value=zy, step=0.01,
-                                                     format="%.4f", key=f"edit_tz_y_{i}")
+                                                     format="%.4f", key=f"edit_tz_y_{active_img}_{i}")
                             with ec3:
                                 ew = st.number_input("W", min_value=0.0, max_value=1.0, value=zw, step=0.01,
-                                                     format="%.4f", key=f"edit_tz_w_{i}")
+                                                     format="%.4f", key=f"edit_tz_w_{active_img}_{i}")
                             with ec4:
                                 eh = st.number_input("H", min_value=0.0, max_value=1.0, value=zh, step=0.01,
-                                                     format="%.4f", key=f"edit_tz_h_{i}")
+                                                     format="%.4f", key=f"edit_tz_h_{active_img}_{i}")
                             ec5, ec6 = st.columns(2)
                             with ec5:
-                                if st.button("Save", key=f"save_text_zone_{i}"):
+                                if st.button("Save", key=f"save_text_zone_{active_img}_{i}"):
                                     if update_text_zone(i, ex, ey, ew, eh):
-                                        st.session_state.pop(f"_edit_text_zone_{i}", None)
+                                        st.session_state.pop(f"_edit_text_zone_{active_img}_{i}", None)
                             with ec6:
-                                if st.button("Cancel", key=f"cancel_text_zone_{i}"):
-                                    st.session_state.pop(f"_edit_text_zone_{i}", None)
+                                if st.button("Cancel", key=f"cancel_text_zone_{active_img}_{i}"):
+                                    st.session_state.pop(f"_edit_text_zone_{active_img}_{i}", None)
                     except Exception as e:
                         st.error(f"Error displaying text zone {i}: {e}")
 
@@ -684,10 +809,11 @@ def render_sidebar():
                     st.success(f"✅ Ignore zone '{zone_name}' added!")
                     st.rerun()
 
-            # Display saved ignore zones
-            if st.session_state.ignore_zones:
+            # Display saved ignore zones (per-image if active)
+            iz_list = st.session_state.ignore_zones_by_image.get(active_img, []) if active_img else st.session_state.ignore_zones
+            if iz_list:
                 st.markdown("**Current Ignore Zones:**")
-                for i, item in enumerate(st.session_state.ignore_zones):
+                for i, item in enumerate(iz_list):
                     try:
                         name = item.get("name", f"Zone {i + 1}")
                         zone_data = item.get("zone", (0, 0, 0, 0))
@@ -698,36 +824,36 @@ def render_sidebar():
 
                         col_a, col_b = st.columns(2)
                         with col_a:
-                            if st.button(f"❌ Delete", key=f"del_ignore_zone_{i}"):
+                            if st.button(f"❌ Delete", key=f"del_ignore_zone_{active_img}_{i}"):
                                 delete_ignore_zone(i)
                         with col_b:
-                            if st.button(f"✏️ Edit fields", key=f"edit_ignore_zone_{i}"):
-                                st.session_state[f"_edit_ignore_zone_{i}"] = True
+                            if st.button(f"✏️ Edit fields", key=f"edit_ignore_zone_{active_img}_{i}"):
+                                st.session_state[f"_edit_ignore_zone_{active_img}_{i}"] = True
 
-                        if st.session_state.get(f"_edit_ignore_zone_{i}"):
+                        if st.session_state.get(f"_edit_ignore_zone_{active_img}_{i}"):
                             st.markdown("Edit fields:")
                             ec1, ec2, ec3, ec4 = st.columns(4)
                             with ec1:
                                 ex = st.number_input("X", min_value=0.0, max_value=1.0, value=zx, step=0.01,
-                                                     format="%.4f", key=f"edit_iz_x_{i}")
+                                                     format="%.4f", key=f"edit_iz_x_{active_img}_{i}")
                             with ec2:
                                 ey = st.number_input("Y", min_value=0.0, max_value=1.0, value=zy, step=0.01,
-                                                     format="%.4f", key=f"edit_iz_y_{i}")
+                                                     format="%.4f", key=f"edit_iz_y_{active_img}_{i}")
                             with ec3:
                                 ew = st.number_input("W", min_value=0.0, max_value=1.0, value=zw, step=0.01,
-                                                     format="%.4f", key=f"edit_iz_w_{i}")
+                                                     format="%.4f", key=f"edit_iz_w_{active_img}_{i}")
                             with ec4:
                                 eh = st.number_input("H", min_value=0.0, max_value=1.0, value=zh, step=0.01,
-                                                     format="%.4f", key=f"edit_iz_h_{i}")
+                                                     format="%.4f", key=f"edit_iz_h_{active_img}_{i}")
                             ec5, ec6 = st.columns(2)
                             with ec5:
-                                if st.button("Save", key=f"save_ignore_zone_{i}"):
+                                if st.button("Save", key=f"save_ignore_zone_{active_img}_{i}"):
                                     if update_ignore_zone(i, ex, ey, ew, eh):
-                                        st.session_state.pop(f"_edit_ignore_zone_{i}", None)
+                                        st.session_state.pop(f"_edit_ignore_zone_{active_img}_{i}", None)
                                         st.success("Saved")
                             with ec6:
-                                if st.button("Cancel", key=f"cancel_ignore_zone_{i}"):
-                                    st.session_state.pop(f"_edit_ignore_zone_{i}", None)
+                                if st.button("Cancel", key=f"cancel_ignore_zone_{active_img}_{i}"):
+                                    st.session_state.pop(f"_edit_ignore_zone_{active_img}_{i}", None)
                     except Exception as e:
                         st.error(f"Error displaying ignore zone {i}: {e}")
 
@@ -760,13 +886,14 @@ def render_process_mode():
         if current_sig and st.session_state._last_upload_signatures != current_sig:
             st.session_state.text_zones = list(st.session_state.text_zones_default)
             st.session_state.ignore_zones = load_json_cached(IGNORE_ZONES_FILE, [])
+            # reset per-image stores for the new batch
+            st.session_state.zones_by_image = {}
+            st.session_state.ignore_zones_by_image = {}
             st.session_state._last_upload_signatures = current_sig
             st.session_state._is_single_upload = (len(current_sig) == 1)
             # clear previous cached image when a new set is uploaded
             st.session_state._cached_img_bytes = None
             st.session_state._cached_img_name = None
-        # Determine if single or multiple images
-        is_single = len(uploaded_files) == 1
 
         # Auto-process images when uploaded
         if len(uploaded_files) != len(st.session_state.batch_results) or not st.session_state.batch_results:
@@ -792,6 +919,10 @@ def render_process_mode():
                     raw_bytes = raw_buf.getvalue()
                     st.session_state["_cached_img_bytes"] = raw_bytes
                     st.session_state["_cached_img_name"] = uploaded_file.name
+                    # set current edit target to this file while processing
+                    st.session_state["current_edit_image"] = uploaded_file.name
+                    # ensure per-image containers exist seeded from current defaults
+                    _ensure_per_image_zone_containers(uploaded_file.name)
                     cached_batch.append({"bytes": raw_bytes, "name": uploaded_file.name})
                     result = process_image(img, ocr_reader, st.session_state.overlap_threshold, uploaded_file.name)
                     st.session_state.batch_results.append(result)
@@ -814,7 +945,7 @@ def render_process_mode():
             # Single image display
             result = st.session_state.batch_results[0]
 
-            col1, col2 = st.columns([2, 1])
+            col1, col2 = st.columns([3, 1])
             with col1:
                 st.image(result["annotated_image"], caption=f"QA Result – Score: {result['score']}%",
                          use_container_width=True)
@@ -824,6 +955,9 @@ def render_process_mode():
                 st.metric("Infractions", len(result["penalties"]))
                 st.metric("Processing Time", f"{result['processing_time']:.2f}s")
                 st.metric("Aspect Ratio", f"{result['aspect_ratio']:.2f}")
+                # Ensure per-image containers for single image and set edit target
+                _ensure_per_image_zone_containers(result["filename"]) 
+                st.session_state["current_edit_image"] = result["filename"]
 
             # Display penalties
             if result["penalties"]:
@@ -861,6 +995,22 @@ def render_process_mode():
                             file_name=f"banner_qa_{result['filename']}.pdf",
                             mime="application/pdf"
                         )
+
+            # Excel export with embedded annotated image for single image
+            if st.button("📊 Export as Excel (XLSX)"):
+                try:
+                    from utils import generate_excel_report
+
+                    xlsx_data = generate_excel_report([result])
+                    if xlsx_data:
+                        st.download_button(
+                            label="Download Excel",
+                            data=xlsx_data,
+                            file_name=f"banner_qa_{result['filename']}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                except Exception as e:
+                    st.error(f"Excel export failed: {e}")
 
         else:
             # Multiple images display (batch mode)
@@ -910,7 +1060,10 @@ def render_process_mode():
 
             for i, (tab, result) in enumerate(zip(tabs, st.session_state.batch_results[:10])):
                 with tab:
-                    col1, col2 = st.columns([2, 1])
+                    # Set current edit image from the active tab and ensure containers
+                    st.session_state["current_edit_image"] = result["filename"]
+                    _ensure_per_image_zone_containers(result["filename"]) 
+                    col1, col2 = st.columns([3, 1])
 
                     with col1:
                         # Display annotated image
@@ -973,6 +1126,22 @@ def render_process_mode():
                             mime="application/pdf"
                         )
 
+            # Excel export for batch
+            if st.button("📊 Export Batch as Excel (XLSX)"):
+                try:
+                    from utils import generate_excel_report
+
+                    xlsx_data = generate_excel_report(st.session_state.batch_results)
+                    if xlsx_data:
+                        st.download_button(
+                            label="Download Excel Report",
+                            data=xlsx_data,
+                            file_name=f"batch_qa_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                except Exception as e:
+                    st.error(f"Excel export failed: {e}")
+
 
 # --- Main Application Logic ---
 def main():
@@ -1004,3 +1173,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
