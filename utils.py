@@ -237,8 +237,9 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
                 self.text_color = colors.white
 
             def wrap(self, availWidth, availHeight):
-                total_lines = max(1, len(self.lines) + 1)  # title + lines
-                self._height = self.padding * 2 + self.line_height * total_lines
+                # Ensure enough room for title + all lines (no clipping on last item)
+                total_lines = (len(self.lines) + 1)  # title + lines
+                self._height = self.padding * 2 + self.line_height * total_lines + 2  # safety padding
                 return self.width, self._height
 
             def draw(self):
@@ -257,12 +258,9 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
                 c.setFont('Helvetica-Bold', 12)
                 c.drawString(self.padding, y, 'Infractions')
                 c.setFont('Helvetica', 10)
-                y -= self.line_height
                 for line in self.lines:
-                    if y <= self.padding:
-                        break
-                    c.drawString(self.padding, y, line)
                     y -= self.line_height
+                    c.drawString(self.padding, y, line)
                 c.restoreState()
 
         for idx, result in enumerate(results, start=1):

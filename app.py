@@ -1,12 +1,14 @@
 import streamlit as st
 from PIL import Image, ImageDraw
 import json
+import copy
 import os
 import easyocr
 import io
 import hashlib
 import time
 from typing import List, Dict, Tuple, Optional
+import pickle
 from datetime import datetime
 import pandas as pd
 
@@ -26,23 +28,43 @@ st.set_page_config(
     page_icon="🎯"
 )
 
-# --- Sidebar Button Styling (standardized and auto-fit text) ---
+# --- Sidebar Button Styling (standardized, auto-fit text, two columns) ---
 st.markdown("""
 <style>
 /* Sidebar buttons: st.button and st.download_button */
 section[data-testid="stSidebar"] div.stButton > button,
 section[data-testid="stSidebar"] div.stDownloadButton > button {
   width: 100% !important;          /* fill the sidebar width */
-  min-height: 48px !important;     /* comfortable tap target */
-  padding: 10px 14px !important;   /* balanced padding */
+  min-height: 36px !important;     /* smaller tap target per request */
+  padding: 8px 12px !important;    /* balanced padding */
   line-height: 1.2 !important;     /* better multi-line readability */
   white-space: normal !important;  /* allow wrapping */
   overflow: visible !important;    /* show full content */
   text-overflow: unset !important; /* no ellipsis */
 }
-/* Consistent spacing between buttons */
-section[data-testid="stSidebar"] div.stButton { margin-bottom: 8px; }
-section[data-testid="stSidebar"] div.stDownloadButton { margin-bottom: 8px; }
+/* Arrange button containers into two columns, but allow wrapping when space is tight */
+section[data-testid="stSidebar"] div.stButton,
+section[data-testid="stSidebar"] div.stDownloadButton {
+  width: calc(50% - 6px) !important;    /* at most 2 per row */
+  min-width: 120px !important;          /* prevent tiny buttons; no character limit */
+  display: inline-block !important;
+  vertical-align: top !important;
+  margin-right: 6px !important;
+  margin-bottom: 8px !important;
+}
+/* Inside expanders (e.g., Text Zones), let buttons size to content */
+section[data-testid="stSidebar"] div[data-testid="stExpander"] div.stButton,
+section[data-testid="stSidebar"] div[data-testid="stExpander"] div.stDownloadButton {
+  width: auto !important;
+  min-width: 0 !important;
+  display: inline-block !important;
+  margin-right: 6px !important;
+  margin-bottom: 6px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] div.stButton > button,
+section[data-testid="stSidebar"] div[data-testid="stExpander"] div.stDownloadButton > button {
+  width: auto !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,13 +86,31 @@ def load_reader():
 def run_ocr_cached(_reader, img_bytes: bytes, image_hash: str, contrast_ths=0.05, adjust_contrast=0.7,
                    text_threshold=0.7, decoder="beamsearch"):
     """Run OCR with caching based on image hash to avoid reprocessing identical images."""
-    return _reader.readtext(
+    # Persistent disk cache to preserve results across reruns/restarts
+    try:
+        cache_dir = "ocr_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_key = f"{image_hash}_{contrast_ths}_{adjust_contrast}_{text_threshold}_{decoder}.pkl"
+        cache_path = os.path.join(cache_dir, cache_key)
+        if os.path.exists(cache_path):
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+    except Exception:
+        pass
+
+    results = _reader.readtext(
         img_bytes,
         contrast_ths=contrast_ths,
         adjust_contrast=adjust_contrast,
         text_threshold=text_threshold,
         decoder=decoder,
     )
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump(results, f)
+    except Exception:
+        pass
+    return results
 
 
 # (auto-adjust helpers removed)
@@ -156,9 +196,9 @@ def _ensure_per_image_zone_containers(img_key: Optional[str]):
         return
     try:
         if img_key not in st.session_state.zones_by_image:
-            st.session_state.zones_by_image[img_key] = list(st.session_state.text_zones)
+            st.session_state.zones_by_image[img_key] = copy.deepcopy(st.session_state.text_zones)
         if img_key not in st.session_state.ignore_zones_by_image:
-            st.session_state.ignore_zones_by_image[img_key] = list(st.session_state.ignore_zones)
+            st.session_state.ignore_zones_by_image[img_key] = copy.deepcopy(st.session_state.ignore_zones)
     except Exception:
         pass
 
@@ -629,6 +669,10 @@ def render_sidebar():
     """Render the sidebar with all controls."""
     try:
         st.sidebar.title("⚙️ Settings")
+        # Deferred clear for ignore_input to avoid modifying widget state post-instantiation
+        if st.session_state.get("_clear_ignore_input"):
+            st.session_state["ignore_input"] = ""
+            st.session_state.pop("_clear_ignore_input", None)
         # Explicit image selector so sidebar edits always target a known image
         options_names = []
         try:
@@ -640,28 +684,40 @@ def render_sidebar():
         except Exception:
             options_names = []
 
-        default_img = st.session_state.get("current_edit_image") or (options_names[0] if options_names else None)
-        active_img = default_img
+        # Apply any pending programmatic image switch BEFORE creating the widget
+        if st.session_state.get("_pending_edit_image"):
+            st.session_state["current_edit_image"] = st.session_state["_pending_edit_image"]
+            st.session_state.pop("_pending_edit_image", None)
+        active_img = st.session_state.get("current_edit_image")
         if options_names:
+            if not active_img or active_img not in options_names:
+                st.session_state["current_edit_image"] = options_names[0]
+                active_img = options_names[0]
             selected = st.sidebar.selectbox(
                 "Editing image",
                 options=options_names,
-                index=options_names.index(default_img) if default_img in options_names else 0,
-                key="_sidebar_edit_image_select",
+                key="current_edit_image",
             )
             active_img = selected
-            st.session_state["current_edit_image"] = selected
             _ensure_per_image_zone_containers(selected)
+        else:
+            active_img = st.session_state.get("current_edit_image")
         if active_img:
             st.sidebar.caption(f"Editing image: {active_img}")
 
         # Detection Settings
         with st.sidebar.expander("🔎 Detection Settings", expanded=False):
+            prev_thr = st.session_state.overlap_threshold
             st.session_state.overlap_threshold = st.slider(
                 "Minimum overlap (%) for text to count as inside a zone",
                 min_value=0.0, max_value=1.0, value=st.session_state.overlap_threshold,
                 step=0.01, format="%.4f"
             )
+            if st.session_state.overlap_threshold != prev_thr:
+                try:
+                    _reprocess_from_cache()
+                except Exception:
+                    pass
 
         # Text Zones Management
         with st.sidebar.expander("📐 Text Zones", expanded=False):
@@ -702,7 +758,8 @@ def render_sidebar():
                         st.write(f"{i + 1}. **{name}**  (x={zx:.3f}, y={zy:.3f}, w={zw:.3f}, h={zh:.3f})")
 
                         # Default zone check by object id to keep consistent even after edits
-                        is_default = id(item) in st.session_state._default_zone_ids
+                        # Per-image default identity must be based on index for now
+                        is_default = False
 
                         col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
                         with col1:
@@ -744,10 +801,10 @@ def render_sidebar():
                                 new_h = max(0.0, zh - 0.02)
                                 update_text_zone(i, zx, zy, zw, new_h)
 
-                        # Inline edit form
+                        # Inline edit form (buttons aligned with inputs)
                         if st.session_state.get(f"_edit_text_zone_{active_img}_{i}"):
                             st.markdown("Edit fields:")
-                            ec1, ec2, ec3, ec4 = st.columns(4)
+                            ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1, 1, 1, 1, 1, 1])
                             with ec1:
                                 ex = st.number_input("X", min_value=0.0, max_value=1.0, value=zx, step=0.01,
                                                      format="%.4f", key=f"edit_tz_x_{active_img}_{i}")
@@ -760,7 +817,6 @@ def render_sidebar():
                             with ec4:
                                 eh = st.number_input("H", min_value=0.0, max_value=1.0, value=zh, step=0.01,
                                                      format="%.4f", key=f"edit_tz_h_{active_img}_{i}")
-                            ec5, ec6 = st.columns(2)
                             with ec5:
                                 if st.button("Save", key=f"save_text_zone_{active_img}_{i}"):
                                     if update_text_zone(i, ex, ey, ew, eh):
@@ -777,12 +833,13 @@ def render_sidebar():
             if st.button("Add Ignore Terms"):
                 new_terms = [t.strip() for t in ignore_input.split(",") if t.strip()]
                 if add_ignore_terms(new_terms):
-                    # clear input and reprocess current image to update score/infractions immediately
-                    st.session_state["ignore_input"] = ""
+                    # request clear on next rerun and reprocess current image
+                    st.session_state["_clear_ignore_input"] = True
                     try:
                         _reprocess_from_cache()
                     except Exception:
                         pass
+                    st.rerun()
 
             if st.session_state.persistent_ignore_terms:
                 st.markdown("**Ignored Terms:**")
@@ -1047,60 +1104,64 @@ def render_process_mode():
             df = pd.DataFrame(results_data)
             st.dataframe(df, use_container_width=True)
 
-            # Display annotated images with boxes
+            # Display annotated images with boxes (single active image)
             st.subheader("📸 Annotated Images")
 
-            # Create tabs for better organization
-            tab_names = [f"{result['filename']} ({result['score']}%)" for result in st.session_state.batch_results]
-            if len(tab_names) > 10:  # If too many images, show first 10
-                tab_names = tab_names[:10]
-                st.info(f"Showing first 10 images. Total processed: {len(st.session_state.batch_results)}")
+            names = [r["filename"] for r in st.session_state.batch_results]
+            active = st.session_state.get("current_edit_image") or (names[0] if names else None)
+            if active not in names and names:
+                active = names[0]
+                st.session_state["current_edit_image"] = active
 
-            tabs = st.tabs(tab_names)
+            # Button group for switching images (kept in sync with sidebar selector)
+            if names:
+                cols = st.columns(min(4, len(names)))
+                for idx, name in enumerate(names):
+                    with cols[idx % len(cols)]:
+                        if st.button(name, key=f"img_switch_btn_{name}"):
+                            st.session_state["_pending_edit_image"] = name
+                            _ensure_per_image_zone_containers(name)
+                            try:
+                                _reprocess_from_cache()
+                            except Exception:
+                                pass
+                            st.rerun()
 
-            for i, (tab, result) in enumerate(zip(tabs, st.session_state.batch_results[:10])):
-                with tab:
-                    # Set current edit image from the active tab and ensure containers
-                    st.session_state["current_edit_image"] = result["filename"]
-                    _ensure_per_image_zone_containers(result["filename"]) 
-                    col1, col2 = st.columns([3, 1])
+            # Render only the active image panel
+            active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)
+            if active_result:
+                _ensure_per_image_zone_containers(active_result["filename"]) 
+                col1, col2 = st.columns([3, 1])
 
-                    with col1:
-                        # Display annotated image
-                        st.image(
-                            result["annotated_image"],
-                            caption=f"Score: {result['score']}% | Infractions: {len(result['penalties'])}",
-                            use_container_width=True
-                        )
+                with col1:
+                    st.image(
+                        active_result["annotated_image"],
+                        caption=f"Score: {active_result['score']}% | Infractions: {len(active_result['penalties'])}",
+                        use_container_width=True
+                    )
 
-                    with col2:
-                        # Display metrics
-                        st.metric("Score", f"{result['score']}%")
-                        st.metric("Infractions", len(result["penalties"]))
-                        st.metric("Processing Time", f"{result['processing_time']:.2f}s")
-                        st.metric("Aspect Ratio", f"{result['aspect_ratio']:.2f}")
+                with col2:
+                    st.metric("Score", f"{active_result['score']}%")
+                    st.metric("Infractions", len(active_result["penalties"]))
+                    st.metric("Processing Time", f"{active_result['processing_time']:.2f}s")
+                    st.metric("Aspect Ratio", f"{active_result['aspect_ratio']:.2f}")
 
-                        # Display penalties if any
-                        if result["penalties"]:
-                            st.error("Infractions:")
-                            for pen in result["penalties"][:5]:  # Show first 5 penalties
-                                if len(pen) == 3:
-                                    msg, txt, pts = pen
-                                    st.write(f"• {msg}: '{txt}' ({pts})")
-                                else:
-                                    msg, pts = pen
-                                    st.write(f"• {msg} ({pts})")
-
-                            if len(result["penalties"]) > 5:
-                                st.write(f"... and {len(result['penalties']) - 5} more")
-                        else:
-                            st.success("✅ Perfect score!")
-
-                    # Show aspect ratio status
-                    if result["aspect_ratio_valid"]:
-                        st.info("✅ Aspect ratio is valid (8:3)")
+                    if active_result["penalties"]:
+                        st.error("Infractions:")
+                        for pen in active_result["penalties"]:
+                            if len(pen) == 3:
+                                msg, txt, pts = pen
+                                st.write(f"• {msg}: '{txt}' ({pts})")
+                            else:
+                                msg, pts = pen
+                                st.write(f"• {msg} ({pts})")
                     else:
-                        st.warning(f"⚠️ Aspect ratio {result['aspect_ratio']:.2f} is not 8:3")
+                        st.success("✅ Perfect score!")
+
+                if active_result["aspect_ratio_valid"]:
+                    st.info("✅ Aspect ratio is valid (8:3)")
+                else:
+                    st.warning(f"⚠️ Aspect ratio {active_result['aspect_ratio']:.2f} is not 8:3")
 
             # Export options for batch
             st.subheader("📤 Export Batch Results")
