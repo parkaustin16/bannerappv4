@@ -160,10 +160,10 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
     """Generate a PDF report with a layout inspired by the provided reference.
 
     Page layout (per image):
-    - Top tag-style header with the filename
-    - Two-column body: annotated image on the left, metrics + infractions on the right
-    - A blue "Place disclaimer here" button-like callout below the image
-    - A dark guideline panel with the six rules at the bottom of the page
+    - Top tag-style header with the filename in gray rounded rectangle
+    - Two-column body: annotated image on the left, metrics on the right
+    - AI disclaimer at the bottom
+    - A dark guideline panel with infractions at the bottom of the page
     """
     try:
         from reportlab.lib.pagesizes import letter, landscape
@@ -181,6 +181,8 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
         from reportlab.lib import colors
 
         buffer = io.BytesIO()
+        # Add today's date to the page title
+        today = datetime.now().strftime("%B %d, %Y")
         doc = SimpleDocTemplate(
             buffer,
             pagesize=landscape(letter),
@@ -188,6 +190,7 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             rightMargin=36,
             top=28,
             bottom=28,
+            title=f"PDF Report - {today}"
         )
         elements = []
         styles = getSampleStyleSheet()
@@ -223,6 +226,38 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
         elements.append(Spacer(1, 16))
         elements.append(key_table)
         elements.append(PageBreak())
+
+        # Rounded hero banner title Flowable
+        class HeroBannerTitle(Flowable):
+            def __init__(self, text, width):
+                super().__init__()
+                self.text = text
+                self.width = width
+                self.padding = 8
+                self.line_height = 16
+                self.radius = 8
+                self.bg = colors.HexColor('#6c757d')
+                self.text_color = colors.white
+
+            def wrap(self, availWidth, availHeight):
+                self._height = self.padding * 2 + self.line_height
+                return self.width, self._height
+
+            def draw(self):
+                c = self.canv
+                w = self.width
+                h = getattr(self, '_height', 32)
+                c.saveState()
+                c.setFillColor(self.bg)
+                c.setStrokeColor(self.bg)
+                try:
+                    c.roundRect(0, 0, w, h, self.radius, stroke=0, fill=1)
+                except Exception:
+                    c.rect(0, 0, w, h, stroke=0, fill=1)
+                c.setFillColor(self.text_color)
+                c.setFont('Helvetica-Bold', 11)
+                c.drawString(self.padding, self.padding + 2, self.text)
+                c.restoreState()
 
         # Rounded infractions panel Flowable
         class InfractionsPanel(Flowable):
@@ -267,20 +302,10 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             if idx > 1:
                 elements.append(PageBreak())
 
-            # Header tag styled via a single-cell table
+            # Header with rounded rectangle styling
             filename = result.get('filename', 'Unknown')
             tag_text = f"Hero Banner {idx:02d} - {filename}"
-            tag = Table([[Paragraph(tag_text, tag_style)]], colWidths=[240])
-            tag.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#6c757d')),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ]))
-            elements.append(tag)
+            elements.append(HeroBannerTitle(tag_text, 240))
             elements.append(Spacer(1, 8))
 
             # Build left image cell
@@ -360,6 +385,16 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
                 lines.append('No infractions – perfect score.')
 
             elements.append(InfractionsPanel(lines, doc.width))
+            
+            # AI Disclaimer
+            disclaimer_style = ParagraphStyle(
+                name='Disclaimer', parent=styles['BodyText'], 
+                fontSize=8, leading=10, textColor=colors.grey,
+                alignment=1  # Center alignment
+            )
+            disclaimer_text = "⚠️ DISCLAIMER: All results are analyzed by AI and may not always be 100% accurate. This report is for guidance purposes only and should be reviewed by human operators for final validation."
+            elements.append(Spacer(1, 8))
+            elements.append(Paragraph(disclaimer_text, disclaimer_style))
 
         doc.build(elements)
         return buffer.getvalue()
