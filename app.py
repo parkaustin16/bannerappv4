@@ -1151,6 +1151,12 @@ def render_process_mode():
             active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)
             if active_result:
                 _ensure_per_image_zone_containers(active_result["filename"]) 
+                # Aspect ratio notice above image
+                if active_result["aspect_ratio_valid"]:
+                    st.info("✅ Aspect ratio is valid (8:3)")
+                else:
+                    st.warning(f"⚠️ Aspect ratio {active_result['aspect_ratio']:.2f} is not 8:3")
+
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
@@ -1178,10 +1184,24 @@ def render_process_mode():
                     else:
                         st.success("✅ Perfect score!")
 
-                if active_result["aspect_ratio_valid"]:
-                    st.info("✅ Aspect ratio is valid (8:3)")
-                else:
-                    st.warning(f"⚠️ Aspect ratio {active_result['aspect_ratio']:.2f} is not 8:3")
+                # Delete current image from list
+                st.markdown("---")
+                del_col1, del_col2 = st.columns([1, 3])
+                with del_col1:
+                    if st.button("🗑️ Remove this image from results", key=f"remove_{active_result['filename']}"):
+                        try:
+                            st.session_state.batch_results = [r for r in st.session_state.batch_results if r["filename"] != active_result["filename"]]
+                            cached = st.session_state.get("_cached_batch") or []
+                            st.session_state["_cached_batch"] = [e for e in cached if e.get("name") != active_result["filename"]]
+                            # If we removed the active image, move selection to next available
+                            names_after = [r["filename"] for r in st.session_state.batch_results]
+                            if names_after:
+                                st.session_state["_pending_edit_image"] = names_after[0]
+                            else:
+                                st.session_state.pop("current_edit_image", None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Remove failed: {e}")
 
             # Export options for batch
             st.subheader("📤 Export Batch Results")
