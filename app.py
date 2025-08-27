@@ -1163,7 +1163,8 @@ def render_process_mode():
                                         names_after = [r["filename"] for r in st.session_state.batch_results]
                                         if names_after:
                                             if active == name:  # If we deleted the active image
-                                                st.session_state["_pending_edit_image"] = names_after[0]
+                                                # Switch to the last remaining image
+                                                st.session_state["_pending_edit_image"] = names_after[-1]
                                         else:
                                             # No images left, clear selection
                                             st.session_state.pop("current_edit_image", None)
