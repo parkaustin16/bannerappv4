@@ -893,13 +893,28 @@ def render_sidebar():
                             zone_data[3])
                         st.write(f"{i + 1}: **{name}** → (x={zx:.4f}, y={zy:.4f}, w={zw:.4f}, h={zh:.4f})")
 
-                        col_a, col_b = st.columns(2)
+                        col_a, col_b, col_c, col_d, col_e = st.columns(5)
                         with col_a:
-                            if st.button(f"❌ Delete", key=f"del_ignore_zone_{active_img}_{i}"):
+                            if st.button("❌ Delete", key=f"del_ignore_zone_{active_img}_{i}"):
                                 delete_ignore_zone(i)
                         with col_b:
-                            if st.button(f"✏️ Edit fields", key=f"edit_ignore_zone_{active_img}_{i}"):
-                                st.session_state[f"_edit_ignore_zone_{active_img}_{i}"] = True
+                            if st.button("Move Up", key=f"move_up_ignore_zone_{active_img}_{i}"):
+                                update_ignore_zone(i, zx, max(0.0, zy - 0.02), zw, zh)
+                        with col_c:
+                            if st.button("Move Down", key=f"move_down_ignore_zone_{active_img}_{i}"):
+                                update_ignore_zone(i, zx, min(1.0 - zh, zy + 0.02), zw, zh)
+                        with col_d:
+                            if st.button("Size Up", key=f"expand_ignore_zone_{active_img}_{i}"):
+                                new_h = min(1.0 - zy, zh + 0.02)
+                                update_ignore_zone(i, zx, zy, zw, new_h)
+                        with col_e:
+                            if st.button("Size Down", key=f"shrink_ignore_zone_{active_img}_{i}"):
+                                new_h = max(0.0, zh - 0.02)
+                                update_ignore_zone(i, zx, zy, zw, new_h)
+
+                        # Edit button in separate row
+                        if st.button(f"✏️ Edit fields", key=f"edit_ignore_zone_{active_img}_{i}"):
+                            st.session_state[f"_edit_ignore_zone_{active_img}_{i}"] = True
 
                         if st.session_state.get(f"_edit_ignore_zone_{active_img}_{i}"):
                             st.markdown("Edit fields:")
