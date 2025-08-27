@@ -207,6 +207,13 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             name='Small', parent=styles['BodyText'], fontSize=9, leading=11
         )
 
+        # Calculate summary statistics
+        total_images = len(results)
+        avg_score = sum(r.get('score', 0) for r in results) / total_images if total_images > 0 else 0
+        total_infractions = sum(len(r.get('penalties', [])) for r in results)
+        success_count = sum(1 for r in results if r.get('score', 0) == 100)
+        avg_processing_time = sum(r.get('processing_time', 0) for r in results) / total_images if total_images > 0 else 0
+        
         # Intro page: Color Key with disclaimer
         key_data = [
             ['Green', 'Defined text zone or allowed text (valid - inside zone)'],
@@ -222,8 +229,34 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
         ]))
+        
+        # Summary statistics table
+        summary_data = [
+            ['Total Images', str(total_images)],
+            ['Average Score', f"{avg_score:.1f}%"],
+            ['Total Infractions', str(total_infractions)],
+            ['Perfect Scores', str(success_count)],
+            ['Average Processing Time', f"{avg_processing_time:.2f}s"],
+        ]
+        summary_table = Table(summary_data, colWidths=[200, 100])
+        summary_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+            ('BACKGROUND', (0, 0), (0, -1), colors.whitesmoke),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        
         elements.append(Paragraph(f'PDF Report - {today}', styles['Title']))
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph('Summary Statistics', styles['Heading2']))
+        elements.append(Spacer(1, 8))
+        elements.append(summary_table)
         elements.append(Spacer(1, 16))
+        elements.append(Paragraph('Color Key', styles['Heading2']))
+        elements.append(Spacer(1, 8))
         elements.append(key_table)
         
         # AI Disclaimer on title page only
@@ -452,12 +485,8 @@ def generate_excel_report(results: List[Dict]) -> bytes:
                     if iw > max_width_px:
                         scale = max_width_px / float(iw)
                     
-                    # Use unique filename for each image to avoid conflicts
-                    img_filename = f"annotated_{idx}.png"
-                    
-                    # Insert image with proper options
-                    ws_img.insert_image(row_cursor + 1, 0, img_filename, {
-                        'image_data': img_buf.getvalue(),
+                    # Insert image with proper options - pass BytesIO object directly
+                    ws_img.insert_image(row_cursor + 1, 0, img_buf, {
                         'x_scale': scale,
                         'y_scale': scale,
                         'x_offset': 5,

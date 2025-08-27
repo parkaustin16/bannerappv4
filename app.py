@@ -205,11 +205,9 @@ def _ensure_per_image_zone_containers(img_key: Optional[str]):
 # Safe setter for current_edit_image to avoid mutating a live widget key
 def _safe_set_current_edit_image(name: str):
     try:
-        if not st.session_state.get("_edit_image_widget_instantiated"):
-            st.session_state["current_edit_image"] = name
-        else:
-            st.session_state["_pending_edit_image"] = name
-            st.rerun()
+        # Always use the pending mechanism to be safe
+        st.session_state["_pending_edit_image"] = name
+        st.rerun()
     except Exception:
         # As a fallback, set pending and rerun on next cycle
         st.session_state["_pending_edit_image"] = name
@@ -701,21 +699,33 @@ def render_sidebar():
         if st.session_state.get("_pending_edit_image"):
             st.session_state["current_edit_image"] = st.session_state["_pending_edit_image"]
             st.session_state.pop("_pending_edit_image", None)
+        
         active_img = st.session_state.get("current_edit_image")
         if options_names:
             if not active_img or active_img not in options_names:
                 st.session_state["current_edit_image"] = options_names[0]
                 active_img = options_names[0]
-            selected = st.sidebar.selectbox(
-                "Editing image",
-                options=options_names,
-                key="current_edit_image",
-            )
-            st.session_state["_edit_image_widget_instantiated"] = True
-            active_img = selected
-            _ensure_per_image_zone_containers(selected)
+            
+            # Create the selectbox with the current value
+            try:
+                selected = st.sidebar.selectbox(
+                    "Editing image",
+                    options=options_names,
+                    index=options_names.index(active_img) if active_img in options_names else 0,
+                    key="current_edit_image",
+                )
+                st.session_state["_edit_image_widget_instantiated"] = True
+                active_img = selected
+                _ensure_per_image_zone_containers(selected)
+            except Exception as e:
+                # If there's an error with the selectbox, use the first option
+                st.error(f"Error with image selector: {e}")
+                if options_names:
+                    active_img = options_names[0]
+                    st.session_state["current_edit_image"] = active_img
         else:
             active_img = st.session_state.get("current_edit_image")
+        
         if active_img:
             st.sidebar.caption(f"Editing image: {active_img}")
 
@@ -1147,20 +1157,56 @@ def render_process_mode():
             active = st.session_state.get("current_edit_image") or (names[0] if names else None)
             if active not in names and names:
                 active = names[0]
-                st.session_state["current_edit_image"] = active
+                # Use the safe setter to avoid modifying after widget instantiation
+                _safe_set_current_edit_image(active)
 
-            # Button group for switching images (kept in sync with sidebar selector)
+            # Image selector - use selectbox for better performance with many images
             if names:
-                cols = st.columns(min(4, len(names)))
-                for idx, name in enumerate(names):
-                    with cols[idx % len(cols)]:
-                        if st.button(name, key=f"img_switch_btn_{name}"):
-                            _safe_set_current_edit_image(name)
-                            _ensure_per_image_zone_containers(name)
-                            try:
-                                _reprocess_from_cache()
-                            except Exception:
-                                pass
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    selected_image = st.selectbox(
+                        "Select image to view:",
+                        options=names,
+                        index=names.index(active) if active in names else 0,
+                        key="main_image_selector"
+                    )
+                    if selected_image != active:
+                        _safe_set_current_edit_image(selected_image)
+                        _ensure_per_image_zone_containers(selected_image)
+                        try:
+                            _reprocess_from_cache()
+                        except Exception:
+                            pass
+                        active = selected_image
+                
+                with col2:
+                    st.write(f"**{len(names)} images total**")
+                    st.write(f"**Current: {names.index(active) + 1} of {len(names)}**")
+                    
+                    # Navigation buttons
+                    nav_col1, nav_col2 = st.columns(2)
+                    with nav_col1:
+                        if st.button("⬅️ Previous", key="prev_img_btn"):
+                            current_idx = names.index(active)
+                            if current_idx > 0:
+                                prev_image = names[current_idx - 1]
+                                _safe_set_current_edit_image(prev_image)
+                                _ensure_per_image_zone_containers(prev_image)
+                                try:
+                                    _reprocess_from_cache()
+                                except Exception:
+                                    pass
+                    with nav_col2:
+                        if st.button("Next ➡️", key="next_img_btn"):
+                            current_idx = names.index(active)
+                            if current_idx < len(names) - 1:
+                                next_image = names[current_idx + 1]
+                                _safe_set_current_edit_image(next_image)
+                                _ensure_per_image_zone_containers(next_image)
+                                try:
+                                    _reprocess_from_cache()
+                                except Exception:
+                                    pass
 
             # Render only the active image panel
             active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)

@@ -2182,5 +2182,265 @@
             1078
         ],
         "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T10:32:44.422963",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.3206169605255127,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T10:32:47.024431",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.6920278072357178,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T10:32:48.656555",
+        "filename": "de_2.png",
+        "score": 0,
+        "infractions": 25,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.1128981113433838,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T10:34:26.617247",
+        "filename": "de_1.png",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 93.01326560974121,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T10:34:29.464168",
+        "filename": "hk_11.png",
+        "score": 90,
+        "infractions": 2,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.7744419574737549,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T10:35:12.279939",
+        "filename": "hk_1.png",
+        "score": 35,
+        "infractions": 13,
+        "aspect_ratio_valid": true,
+        "processing_time": 41.65794014930725,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T10:35:56.005612",
+        "filename": "hk_7.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 43.212438344955444,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T10:36:36.429119",
+        "filename": "hk_3.png",
+        "score": 60,
+        "infractions": 8,
+        "aspect_ratio_valid": true,
+        "processing_time": 39.6697313785553,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-27T10:37:11.793686",
+        "filename": "hk_5.png",
+        "score": 60,
+        "infractions": 8,
+        "aspect_ratio_valid": true,
+        "processing_time": 34.812785625457764,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-27T10:38:04.355256",
+        "filename": "hk_13 (1).png",
+        "score": 60,
+        "infractions": 8,
+        "aspect_ratio_valid": true,
+        "processing_time": 51.94913291931152,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-27T10:38:05.453841",
+        "filename": "hk_13.png",
+        "score": 60,
+        "infractions": 8,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.6125187873840332,
+        "image_size": [
+            2874,
+            1078
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-27T10:39:07.367887",
+        "filename": "cl_1.png",
+        "score": 60,
+        "infractions": 8,
+        "aspect_ratio_valid": true,
+        "processing_time": 61.115596294403076,
+        "image_size": [
+            2878,
+            1078
+        ],
+        "zones_used": 4
+    },
+    {
+        "timestamp": "2025-08-27T10:39:47.971637",
+        "filename": "LG_OM_WebBanner_1920x720_EN.png",
+        "score": 55,
+        "infractions": 9,
+        "aspect_ratio_valid": true,
+        "processing_time": 40.397985219955444,
+        "image_size": [
+            1920,
+            720
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-27T10:56:14.894636",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.2200086116790771,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T10:56:20.322898",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 3.126763343811035,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:00:25.932081",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.4559881687164307,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:00:31.568033",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 4.050344467163086,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:00:33.401492",
+        "filename": "de_2.png",
+        "score": 0,
+        "infractions": 25,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.1386148929595947,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T11:05:58.414877",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.5786118507385254,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:06:00.948077",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.4689140319824219,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
     }
 ]
