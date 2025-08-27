@@ -1134,44 +1134,18 @@ def render_process_mode():
                 active = names[0]
                 st.session_state["current_edit_image"] = active
 
-            # Button group for switching images with delete buttons
+            # Button group for switching images (kept in sync with sidebar selector)
             if names:
                 cols = st.columns(min(4, len(names)))
                 for idx, name in enumerate(names):
                     with cols[idx % len(cols)]:
-                        # Create a container for each image button row
-                        btn_container = st.container()
-                        with btn_container:
-                            col1, col2 = st.columns([4, 1])
-                            with col1:
-                                if st.button(name, key=f"img_switch_btn_{name}"):
-                                    _safe_set_current_edit_image(name)
-                                    _ensure_per_image_zone_containers(name)
-                                    try:
-                                        _reprocess_from_cache()
-                                    except Exception:
-                                        pass
-                            with col2:
-                                if st.button("❌", key=f"delete_btn_{name}", help=f"Remove {name}"):
-                                    try:
-                                        # Remove from batch results
-                                        st.session_state.batch_results = [r for r in st.session_state.batch_results if r["filename"] != name]
-                                        # Remove from cached batch
-                                        cached = st.session_state.get("_cached_batch") or []
-                                        st.session_state["_cached_batch"] = [e for e in cached if e.get("name") != name]
-                                        # Update current selection if needed
-                                        names_after = [r["filename"] for r in st.session_state.batch_results]
-                                        if names_after:
-                                            if active == name:  # If we deleted the active image
-                                                # Switch to the last remaining image
-                                                st.session_state["_pending_edit_image"] = names_after[-1]
-                                        else:
-                                            # No images left, clear selection
-                                            st.session_state.pop("current_edit_image", None)
-                                            st.session_state.pop("_pending_edit_image", None)
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Failed to remove {name}: {e}")
+                        if st.button(name, key=f"img_switch_btn_{name}"):
+                            _safe_set_current_edit_image(name)
+                            _ensure_per_image_zone_containers(name)
+                            try:
+                                _reprocess_from_cache()
+                            except Exception:
+                                pass
 
             # Render only the active image panel
             active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)
