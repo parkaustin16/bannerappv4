@@ -207,7 +207,7 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             name='Small', parent=styles['BodyText'], fontSize=9, leading=11
         )
 
-        # Intro page: Color Key only
+        # Intro page: Color Key with disclaimer
         key_data = [
             ['Green', 'Defined text zone or allowed text (valid - inside zone)'],
             ['Blue', 'Defined ignored zones or ignored text'],
@@ -222,24 +222,42 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
         ]))
-        elements.append(Paragraph('Color Key', styles['Title']))
+        elements.append(Paragraph(f'PDF Report - {today}', styles['Title']))
         elements.append(Spacer(1, 16))
         elements.append(key_table)
+        
+        # AI Disclaimer on title page only
+        disclaimer_style = ParagraphStyle(
+            name='Disclaimer', parent=styles['BodyText'], 
+            fontSize=8, leading=10, textColor=colors.grey,
+            alignment=1  # Center alignment
+        )
+        disclaimer_text = "⚠️ DISCLAIMER: All results are analyzed by AI and may not always be 100% accurate. This report is for guidance purposes only and should be reviewed by human operators for final validation."
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph(disclaimer_text, disclaimer_style))
         elements.append(PageBreak())
 
         # Rounded hero banner title Flowable
         class HeroBannerTitle(Flowable):
-            def __init__(self, text, width):
+            def __init__(self, text):
                 super().__init__()
                 self.text = text
-                self.width = width
                 self.padding = 8
                 self.line_height = 16
                 self.radius = 8
-                self.bg = colors.HexColor('#6c757d')
+                self.bg = colors.HexColor('#343a40')  # Same as infractions panel
                 self.text_color = colors.white
 
             def wrap(self, availWidth, availHeight):
+                # Calculate text width to fit the content
+                c = self.canv
+                c.saveState()
+                c.setFont('Helvetica-Bold', 11)
+                text_width = c.stringWidth(self.text, 'Helvetica-Bold', 11)
+                c.restoreState()
+                
+                # Set width to text width + padding, with minimum width
+                self.width = max(240, text_width + self.padding * 2)
                 self._height = self.padding * 2 + self.line_height
                 return self.width, self._height
 
@@ -305,7 +323,7 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             # Header with rounded rectangle styling
             filename = result.get('filename', 'Unknown')
             tag_text = f"Hero Banner {idx:02d} - {filename}"
-            elements.append(HeroBannerTitle(tag_text, 240))
+            elements.append(HeroBannerTitle(tag_text))
             elements.append(Spacer(1, 8))
 
             # Build left image cell
@@ -385,16 +403,6 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
                 lines.append('No infractions – perfect score.')
 
             elements.append(InfractionsPanel(lines, doc.width))
-            
-            # AI Disclaimer
-            disclaimer_style = ParagraphStyle(
-                name='Disclaimer', parent=styles['BodyText'], 
-                fontSize=8, leading=10, textColor=colors.grey,
-                alignment=1  # Center alignment
-            )
-            disclaimer_text = "⚠️ DISCLAIMER: All results are analyzed by AI and may not always be 100% accurate. This report is for guidance purposes only and should be reviewed by human operators for final validation."
-            elements.append(Spacer(1, 8))
-            elements.append(Paragraph(disclaimer_text, disclaimer_style))
 
         doc.build(elements)
         return buffer.getvalue()
@@ -436,23 +444,38 @@ def generate_excel_report(results: List[Dict]) -> bytes:
                     img_buf = io.BytesIO()
                     img.save(img_buf, format='PNG')
                     img_buf.seek(0)
-                    # Insert image with scaling if too wide
-                    max_width_px = 1000  # reasonable width for Excel
+                    
+                    # Insert image with proper scaling
+                    max_width_px = 800  # reasonable width for Excel
                     iw, ih = img.size
                     scale = 1.0
                     if iw > max_width_px:
                         scale = max_width_px / float(iw)
-                    ws_img.insert_image(row_cursor + 1, 0, 'annotated.png', {
-                        'image_data': img_buf,
+                    
+                    # Use unique filename for each image to avoid conflicts
+                    img_filename = f"annotated_{idx}.png"
+                    
+                    # Insert image with proper options
+                    ws_img.insert_image(row_cursor + 1, 0, img_filename, {
+                        'image_data': img_buf.getvalue(),
                         'x_scale': scale,
-                        'y_scale': scale
+                        'y_scale': scale,
+                        'x_offset': 5,
+                        'y_offset': 5
                     })
-                    # Advance cursor by image height in rows (~20 px/row)
-                    row_cursor += int((ih * scale) / 20) + 4
+                    
+                    # Add some metadata about the image
+                    ws_img.write(row_cursor + 1, 1, f"Score: {result.get('score', 0)}%")
+                    ws_img.write(row_cursor + 1, 2, f"Infractions: {len(result.get('penalties', []))}")
+                    
+                    # Advance cursor by image height in rows (~20 px/row) plus some spacing
+                    row_cursor += int((ih * scale) / 20) + 6
                 else:
                     row_cursor += 2
-            except Exception:
-                row_cursor += 2
+            except Exception as e:
+                # If image insertion fails, still add the filename and error info
+                ws_img.write(row_cursor + 1, 1, f"Error inserting image: {str(e)}")
+                row_cursor += 4
 
         wb.close()
         output.seek(0)
