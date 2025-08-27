@@ -470,6 +470,72 @@ def delete_ignore_zone(index: int) -> bool:
         return False
 
 
+def add_ignore_zone_for_infraction(infraction_number: int) -> bool:
+    """Add an ignore zone around a specific infraction by its number."""
+    try:
+        # Get the current active image result
+        active_img = st.session_state.get("current_edit_image")
+        if not active_img:
+            st.error("No active image selected")
+            return False
+        
+        # Find the current image result
+        batch_results = st.session_state.get("batch_results", [])
+        current_result = None
+        for result in batch_results:
+            if result.get("filename") == active_img:
+                current_result = result
+                break
+        
+        if not current_result:
+            st.error("Could not find current image result")
+            return False
+        
+        # Check if the infraction number is valid
+        penalties = current_result.get("penalties", [])
+        if infraction_number < 1 or infraction_number > len(penalties):
+            st.error(f"Invalid infraction number: {infraction_number}. Available: 1-{len(penalties)}")
+            return False
+        
+        # Get the specific infraction and its coordinates
+        penalty = penalties[infraction_number - 1]
+        
+        # Check if the penalty has coordinates (new format) or is old format
+        if len(penalty) >= 4:
+            # New format with coordinates
+            norm_x, norm_y, norm_w, norm_h = penalty[3]
+        else:
+            # Old format without coordinates - use fallback
+            st.warning(f"Infraction {infraction_number} doesn't have stored coordinates. Using fallback position.")
+            zone_size = 0.05  # 5% of image size
+            norm_x = 0.1 + (infraction_number - 1) * 0.1  # Spread zones horizontally
+            norm_y = 0.1
+            norm_w = zone_size
+            norm_h = zone_size
+        
+        # Add some padding around the infraction area for better coverage
+        padding = 0.02  # 2% padding
+        zone_x = max(0.0, norm_x - padding)
+        zone_y = max(0.0, norm_y - padding)
+        zone_w = min(1.0 - zone_x, norm_w + 2 * padding)
+        zone_h = min(1.0 - zone_y, norm_h + 2 * padding)
+        
+        # Add the ignore zone
+        zone_name = f"Ignore Infraction {infraction_number}"
+        success = add_ignore_zone(zone_name, zone_x, zone_y, zone_w, zone_h)
+        
+        if success:
+            st.success(f"✅ Added ignore zone for infraction {infraction_number}")
+        else:
+            st.error(f"❌ Failed to add ignore zone for infraction {infraction_number}")
+        
+        return success
+        
+    except Exception as e:
+        st.error(f"Error adding ignore zone for infraction {infraction_number}: {e}")
+        return False
+
+
 def update_ignore_zone(index: int, x: float, y: float, w: float, h: float) -> bool:
     """Update an existing ignore zone by index with clamped normalized values."""
     try:
@@ -649,7 +715,49 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
             msg = f"Text outside allowed zones (best overlap {best_ratio * 100:.1f}% with {best_zone})"
         else:
             msg = "Text outside allowed zones"
-        penalties.append((msg, detected_text, -5))
+            
+        # Add numbered label to the red zone (infraction)
+        infraction_number = len(penalties) + 1
+        label_text = str(infraction_number)
+        
+        # Calculate label position (upper right corner of the red zone)
+        label_x = tx + tw - 20  # 20 pixels from right edge
+        label_y = ty - 15       # 15 pixels above top edge
+        
+        # Draw a larger background circle for the number
+        circle_radius = 12
+        draw.ellipse([label_x - circle_radius, label_y - circle_radius, 
+                     label_x + circle_radius, label_y + circle_radius], 
+                    fill="red", outline="white", width=2)
+        
+        # Draw the number in white with larger font
+        try:
+            # Use a larger font size for better visibility
+            from PIL import ImageFont
+            # Try to use a default font, fallback to default if not available
+            try:
+                font = ImageFont.truetype("arial.ttf", 16)
+            except:
+                font = ImageFont.load_default()
+            # Center the text in the circle
+            text_bbox = draw.textbbox((0, 0), label_text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            text_x = label_x - text_width // 2
+            text_y = label_y - text_height // 2
+            draw.text((text_x, text_y), label_text, fill="white", font=font)
+        except:
+            # Fallback to default font if there's any issue
+            draw.text((label_x - 5, label_y - 7), label_text, fill="white")
+        
+        # Store infraction coordinates for later use in ignore zone creation
+        # Convert pixel coordinates to normalized coordinates (0.0-1.0)
+        norm_x = tx / w
+        norm_y = ty / h
+        norm_w = tw / w
+        norm_h = th / h
+        
+        penalties.append((msg, detected_text, -5, (norm_x, norm_y, norm_w, norm_h)))
         score = max(0, score - 5)  # Ensure score never goes below 0
 
     processing_time = time.time() - start_time
@@ -1119,6 +1227,42 @@ def render_sidebar():
                     except Exception as e:
                         st.error(f"Error displaying ignore zone {i}: {e}")
 
+            # New Ignore Section for infraction buttons
+            st.markdown("### 🎯 Ignore Section")
+            st.markdown("Click buttons below to ignore specific infractions:")
+            
+            # Get current image results to show available infractions
+            if active_img and st.session_state.get("batch_results"):
+                current_result = None
+                for result in st.session_state.get("batch_results", []):
+                    if result.get("filename") == active_img:
+                        current_result = result
+                        break
+                
+                if current_result:
+                    penalties = current_result.get("penalties", [])
+                    if penalties:
+                        st.markdown(f"**Available Infractions ({len(penalties)}):**")
+                        
+                        # Create buttons in a grid layout
+                        cols_per_row = 5  # 5 buttons per row
+                        for i in range(0, len(penalties), cols_per_row):
+                            row_buttons = penalties[i:i + cols_per_row]
+                            cols = st.columns(cols_per_row)
+                            
+                            for j, penalty in enumerate(row_buttons):
+                                with cols[j]:
+                                    infraction_num = i + j + 1
+                                    if st.button(f"#{infraction_num}", key=f"ignore_infraction_{active_img}_{infraction_num}"):
+                                        if add_ignore_zone_for_infraction(infraction_num):
+                                            st.rerun()
+                    else:
+                        st.info("✅ No infractions found - image is perfect!")
+                else:
+                    st.info("No results available for current image")
+            else:
+                st.info("Upload and process an image to see infraction buttons")
+
     except Exception as e:
         st.sidebar.error(f"Error rendering sidebar: {e}")
         # Try to show basic controls if sidebar fails
@@ -1208,6 +1352,12 @@ def render_process_mode():
             cleanup_cache()
             status_text.text("✅ Processing complete!")
             st.success(f"Processed {len(st.session_state.batch_results)} image(s)")
+            
+            # Immediately update the drawing to show numbered labels
+            try:
+                _reprocess_from_cache()
+            except Exception as e:
+                st.warning(f"Could not update drawing immediately: {e}")
 
     # Display results
     if st.session_state.batch_results:
@@ -1236,13 +1386,20 @@ def render_process_mode():
             # Display penalties
             if result["penalties"]:
                 st.error("Infractions:")
-                for pen in result["penalties"]:
-                    if len(pen) == 3:
+                for i, pen in enumerate(result["penalties"]):
+                    infraction_num = i + 1
+                    if len(pen) >= 4:
+                        # New format with coordinates: (msg, txt, pts, coords)
+                        msg, txt, pts = pen[0], pen[1], pen[2]
+                        st.write(f"{infraction_num}. {msg}: '{txt}' ({pts})")
+                    elif len(pen) == 3:
+                        # Old format: (msg, txt, pts)
                         msg, txt, pts = pen
-                        st.write(f"{msg}: '{txt}' ({pts})")
+                        st.write(f"{infraction_num}. {msg}: '{txt}' ({pts})")
                     else:
+                        # Fallback format: (msg, pts)
                         msg, pts = pen
-                        st.write(f"{msg} ({pts})")
+                        st.write(f"{infraction_num}. {msg} ({pts})")
             else:
                 st.success("Perfect score! ✅ All text inside zones.")
 
@@ -1406,17 +1563,22 @@ def render_process_mode():
 
                     if active_result["penalties"]:
                         st.error("Infractions:")
-                        for pen in active_result["penalties"]:
-                            if len(pen) == 3:
+                        for i, pen in enumerate(active_result["penalties"]):
+                            infraction_num = i + 1
+                            if len(pen) >= 4:
+                                # New format with coordinates: (msg, txt, pts, coords)
+                                msg, txt, pts = pen[0], pen[1], pen[2]
+                                st.write(f"• {infraction_num}. {msg}: '{txt}' ({pts})")
+                            elif len(pen) == 3:
+                                # Old format: (msg, txt, pts)
                                 msg, txt, pts = pen
-                                st.write(f"• {msg}: '{txt}' ({pts})")
+                                st.write(f"• {infraction_num}. {msg}: '{txt}' ({pts})")
                             else:
+                                # Fallback format: (msg, pts)
                                 msg, pts = pen
-                                st.write(f"• {msg} ({pts})")
+                                st.write(f"• {infraction_num}. {msg} ({pts})")
                     else:
                         st.success("✅ Perfect score!")
-
-
 
             # Export options for batch
             st.subheader("📤 Export Batch Results")
@@ -1477,7 +1639,7 @@ def main():
 
         # Render sidebar
         render_sidebar()
-        
+
         # Render main content based on mode
         if st.session_state.current_mode == "process":
             render_process_mode()
