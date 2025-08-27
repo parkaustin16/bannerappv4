@@ -2559,5 +2559,44 @@
             1078
         ],
         "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T11:54:08.467314",
+        "filename": "weekend-sale-6-pc-1920X720.jpg",
+        "score": 90,
+        "infractions": 2,
+        "aspect_ratio_valid": true,
+        "processing_time": 18.157896757125854,
+        "image_size": [
+            1920,
+            720
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T11:54:21.020139",
+        "filename": "weekend-sale-8-pc-1920X720.jpg",
+        "score": 85,
+        "infractions": 3,
+        "aspect_ratio_valid": true,
+        "processing_time": 12.109500885009766,
+        "image_size": [
+            1920,
+            720
+        ],
+        "zones_used": 1
+    },
+    {
+        "timestamp": "2025-08-27T11:54:47.348459",
+        "filename": "weekend-sale-10-pc-1920X720.jpg",
+        "score": 85,
+        "infractions": 3,
+        "aspect_ratio_valid": true,
+        "processing_time": 26.16149592399597,
+        "image_size": [
+            1920,
+            720
+        ],
+        "zones_used": 1
     }
 ]

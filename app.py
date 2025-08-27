@@ -11,6 +11,7 @@ from typing import List, Dict, Tuple, Optional
 import pickle
 from datetime import datetime
 import pandas as pd
+import warnings
 
 # Import our utility modules
 from utils import (
@@ -73,6 +74,29 @@ IGNORE_FILE = "ignore_terms.json"
 IGNORE_ZONES_FILE = "ignore_zones.json"
 TEXT_ZONES_FILE = "text_zones.json"
 
+
+# --- Image Processing Utilities ---
+def clean_png_image(img: Image.Image) -> Image.Image:
+    """Clean PNG image to remove problematic color profiles and suppress warnings."""
+    try:
+        # Convert to RGB to remove any problematic color profiles
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Create a new image without any color profile information
+        clean_img = Image.new('RGB', img.size)
+        clean_img.paste(img, (0, 0))
+        
+        return clean_img
+    except Exception as e:
+        # If cleaning fails, return the original image
+        st.warning(f"Could not clean image: {e}")
+        return img
+
+def suppress_png_warnings():
+    """Suppress libpng warnings about incorrect sRGB profiles."""
+    warnings.filterwarnings("ignore", message=".*iCCP.*")
+    warnings.filterwarnings("ignore", message=".*known incorrect sRGB profile.*")
 
 # --- Cached OCR Reader ---
 @st.cache_resource
@@ -662,7 +686,8 @@ def _reprocess_from_cache():
             return
         try:
             img = Image.open(io.BytesIO(raw))
-            result = process_image(img.convert("RGB"), reader, st.session_state.overlap_threshold,
+            img = clean_png_image(img)
+            result = process_image(img, reader, st.session_state.overlap_threshold,
                                    st.session_state.get("_cached_img_name", "Cached"), log_analytics=False)
             st.session_state.batch_results = [result]
         except Exception:
@@ -677,7 +702,8 @@ def _reprocess_from_cache():
         new_results = []
         for entry in batch:
             img = Image.open(io.BytesIO(entry["bytes"]))
-            res = process_image(img.convert("RGB"), reader, st.session_state.overlap_threshold,
+            img = clean_png_image(img)
+            res = process_image(img, reader, st.session_state.overlap_threshold,
                                 entry.get("name", "Cached"), log_analytics=False)
             new_results.append(res)
         st.session_state.batch_results = new_results
@@ -1153,10 +1179,13 @@ def render_process_mode():
                 status_text.text(f"Processing {uploaded_file.name}...")
 
                 try:
-                    img = Image.open(uploaded_file).convert("RGB")
+                    # Open and clean the image to remove problematic color profiles
+                    img = Image.open(uploaded_file)
+                    img = clean_png_image(img)
+                    
                     # cache original bytes for redraws
                     raw_buf = io.BytesIO()
-                    img.save(raw_buf, format="PNG")
+                    img.save(raw_buf, format="PNG", optimize=True)
                     raw_bytes = raw_buf.getvalue()
                     st.session_state["_cached_img_bytes"] = raw_bytes
                     st.session_state["_cached_img_name"] = uploaded_file.name
@@ -1434,6 +1463,9 @@ def render_process_mode():
 def main():
     """Main application function."""
     try:
+        # Suppress PNG warnings
+        suppress_png_warnings()
+        
         # Initialize session state
         initialize_session_state()
 
