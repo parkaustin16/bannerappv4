@@ -145,6 +145,8 @@ def initialize_session_state():
             st.session_state.current_edit_image = None
         if "_hidden_zone_ids_by_image" not in st.session_state:
             st.session_state._hidden_zone_ids_by_image = {}
+        if "_hidden_ignore_zone_ids_by_image" not in st.session_state:
+            st.session_state._hidden_ignore_zone_ids_by_image = {}
 
         # Track uploads to reset zones per image upload
         if "_last_upload_signatures" not in st.session_state:
@@ -157,6 +159,8 @@ def initialize_session_state():
             st.session_state._cached_img_name = None
         if "_hidden_zone_indices" not in st.session_state:
             st.session_state._hidden_zone_indices = set()
+        if "_hidden_ignore_zone_indices" not in st.session_state:
+            st.session_state._hidden_ignore_zone_indices = set()
         # Track default zones by object id so edits to coordinates don't change default status
         if "_default_zone_ids" not in st.session_state:
             try:
@@ -199,24 +203,68 @@ def _ensure_per_image_zone_containers(img_key: Optional[str]):
             st.session_state.zones_by_image[img_key] = copy.deepcopy(st.session_state.text_zones)
         if img_key not in st.session_state.ignore_zones_by_image:
             st.session_state.ignore_zones_by_image[img_key] = copy.deepcopy(st.session_state.ignore_zones)
+        # Initialize hidden state containers for new images
+        if img_key not in st.session_state._hidden_zone_ids_by_image:
+            st.session_state._hidden_zone_ids_by_image[img_key] = set()
+        if img_key not in st.session_state._hidden_ignore_zone_ids_by_image:
+            st.session_state._hidden_ignore_zone_ids_by_image[img_key] = set()
     except Exception:
         pass
 
 # Safe setter for current_edit_image to avoid mutating a live widget key
 def _safe_set_current_edit_image(name: str):
+    """Thread-safe way to set current edit image with validation"""
     try:
-        # Always use the pending mechanism to be safe
-        st.session_state["_pending_edit_image"] = name
-        st.rerun()
-    except Exception:
+        if name and isinstance(name, str):
+            # Always use the pending mechanism to be safe
+            st.session_state["_pending_edit_image"] = name
+            st.rerun()
+        else:
+            st.error("Invalid image name provided")
+    except Exception as e:
+        st.error(f"Error setting current edit image: {e}")
         # As a fallback, set pending and rerun on next cycle
-        st.session_state["_pending_edit_image"] = name
-        st.rerun()
+        try:
+            st.session_state["_pending_edit_image"] = name
+            st.rerun()
+        except Exception:
+            st.error("Failed to set pending edit image")
+
+def cleanup_cache():
+    """Clean up cached data to prevent memory leaks"""
+    try:
+        # Limit cache size to prevent memory issues
+        cached_batch = st.session_state.get("_cached_batch", [])
+        if len(cached_batch) > 50:  # Limit to 50 images
+            st.session_state["_cached_batch"] = cached_batch[-25:]  # Keep last 25
+        
+        # Clean up old cached data
+        if "_cached_img_bytes" in st.session_state and len(st.session_state["_cached_img_bytes"]) > 10 * 1024 * 1024:  # 10MB limit
+            st.session_state.pop("_cached_img_bytes", None)
+            st.session_state.pop("_cached_img_name", None)
+    except Exception as e:
+        # Don't show error for cleanup failures, just log
+        pass
 
 # --- Zone Management Functions ---
 def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
     """Add a new text zone."""
     try:
+        # Validate inputs
+        if not name or not isinstance(name, str):
+            st.error("Invalid zone name")
+            return False
+        
+        # Validate coordinates are within bounds
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0):
+            st.error("Zone coordinates must be between 0.0 and 1.0")
+            return False
+        
+        # Validate zone doesn't exceed image bounds
+        if x + w > 1.0 or y + h > 1.0:
+            st.error("Zone extends beyond image boundaries")
+            return False
+        
         # Determine target list (per-image if selected)
         img_key = st.session_state.get("current_edit_image")
         if img_key:
@@ -234,8 +282,10 @@ def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
             st.session_state.text_zones = zones_list
         try:
             _reprocess_from_cache()
-        except Exception:
-            pass
+        except (ValueError, TypeError) as e:
+            st.error(f"Invalid data during reprocessing: {e}")
+        except Exception as e:
+            st.error(f"Error during reprocessing: {e}")
         return True
     except Exception as e:
         st.error(f"Error adding text zone: {e}")
@@ -251,15 +301,26 @@ def delete_text_zone(index: int) -> bool:
         else:
             zones_list = st.session_state.text_zones.copy()
         if 0 <= index < len(zones_list):
+            # Get the item being deleted to clean up hidden state
+            deleted_item = zones_list[index]
             zones_list.pop(index)
+            
+            # Clean up hidden state tracking for the deleted item
             if img_key:
                 st.session_state.zones_by_image[img_key] = zones_list
+                # Remove from hidden state if it was hidden
+                if img_key in st.session_state._hidden_zone_ids_by_image:
+                    st.session_state._hidden_zone_ids_by_image[img_key].discard(id(deleted_item))
             else:
                 st.session_state.text_zones = zones_list
+                # Remove from global hidden state if it was hidden
+                st.session_state._hidden_zone_indices.discard(id(deleted_item))
             try:
                 _reprocess_from_cache()
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                st.error(f"Invalid data during reprocessing: {e}")
+            except Exception as e:
+                st.error(f"Error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -283,15 +344,21 @@ def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool
             y = float(max(0.0, min(1.0 - h, y)))
             if x + w > 1.0:
                 w = max(0.0, 1.0 - x)
-            zones_list[index]["zone"] = (x, y, w, h)
+            
+            # Preserve the original object to maintain hidden state tracking
+            original_item = zones_list[index]
+            original_item["zone"] = (x, y, w, h)
+            
             if img_key:
                 st.session_state.zones_by_image[img_key] = zones_list
             else:
                 st.session_state.text_zones = zones_list
             try:
                 _reprocess_from_cache()
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                st.error(f"Invalid data during reprocessing: {e}")
+            except Exception as e:
+                st.error(f"Error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -302,6 +369,21 @@ def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool
 def add_ignore_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
     """Add a new ignore zone."""
     try:
+        # Validate inputs
+        if not name or not isinstance(name, str):
+            st.error("Invalid zone name")
+            return False
+        
+        # Validate coordinates are within bounds
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0):
+            st.error("Zone coordinates must be between 0.0 and 1.0")
+            return False
+        
+        # Validate zone doesn't exceed image bounds
+        if x + w > 1.0 or y + h > 1.0:
+            st.error("Zone extends beyond image boundaries")
+            return False
+        
         img_key = st.session_state.get("current_edit_image")
         if img_key:
             zones_list = list(st.session_state.ignore_zones_by_image.get(img_key, []))
@@ -318,8 +400,10 @@ def add_ignore_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
             st.session_state.ignore_zones = zones_list
         try:
             _reprocess_from_cache()
-        except Exception:
-            pass
+        except (ValueError, TypeError) as e:
+            st.error(f"Invalid data during reprocessing: {e}")
+        except Exception as e:
+            st.error(f"Error during reprocessing: {e}")
         return True
     except Exception as e:
         st.error(f"Error adding ignore zone: {e}")
@@ -335,15 +419,26 @@ def delete_ignore_zone(index: int) -> bool:
         else:
             zones_list = st.session_state.ignore_zones.copy()
         if 0 <= index < len(zones_list):
+            # Get the item being deleted to clean up hidden state
+            deleted_item = zones_list[index]
             zones_list.pop(index)
+            
+            # Clean up hidden state tracking for the deleted item
             if img_key:
                 st.session_state.ignore_zones_by_image[img_key] = zones_list
+                # Remove from hidden state if it was hidden
+                if img_key in st.session_state._hidden_ignore_zone_ids_by_image:
+                    st.session_state._hidden_ignore_zone_ids_by_image[img_key].discard(id(deleted_item))
             else:
                 st.session_state.ignore_zones = zones_list
+                # Remove from global hidden state if it was hidden
+                st.session_state._hidden_ignore_zone_indices.discard(id(deleted_item))
             try:
                 _reprocess_from_cache()
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                st.error(f"Invalid data during reprocessing: {e}")
+            except Exception as e:
+                st.error(f"Error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -366,15 +461,21 @@ def update_ignore_zone(index: int, x: float, y: float, w: float, h: float) -> bo
             y = float(max(0.0, min(1.0 - h, y)))
             if x + w > 1.0:
                 w = max(0.0, 1.0 - x)
-            zones_list[index]["zone"] = (x, y, w, h)
+            
+            # Preserve the original object to maintain hidden state tracking
+            original_item = zones_list[index]
+            original_item["zone"] = (x, y, w, h)
+            
             if img_key:
                 st.session_state.ignore_zones_by_image[img_key] = zones_list
             else:
                 st.session_state.ignore_zones = zones_list
             try:
                 _reprocess_from_cache()
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                st.error(f"Invalid data during reprocessing: {e}")
+            except Exception as e:
+                st.error(f"Error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -414,9 +515,13 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
 
     # Convert zones to absolute coordinates
     abs_ignore_zones = []
+    hidden_ignore_ids = st.session_state._hidden_ignore_zone_ids_by_image.get(img_key, set())
     for item in per_image_ignore_zones:
         try:
             name = item.get("name", "Ignore Zone")
+            # Skip hidden ignore zones (per-image)
+            if id(item) in hidden_ignore_ids:
+                continue
             zone_data = item.get("zone", (0, 0, 0, 0))
             # Ensure we have valid numbers
             nx, ny, nw, nh = float(zone_data[0]), float(zone_data[1]), float(zone_data[2]), float(zone_data[3])
@@ -682,7 +787,8 @@ def render_sidebar():
         st.sidebar.title("⚙️ Settings")
         # Deferred clear for ignore_input to avoid modifying widget state post-instantiation
         if st.session_state.get("_clear_ignore_input"):
-            st.session_state["ignore_input"] = ""
+            # Remove the key entirely to avoid widget state conflicts
+            st.session_state.pop("ignore_input", None)
             st.session_state.pop("_clear_ignore_input", None)
         # Explicit image selector so sidebar edits always target a known image
         options_names = []
@@ -697,7 +803,9 @@ def render_sidebar():
 
         # Apply any pending programmatic image switch BEFORE creating the widget
         if st.session_state.get("_pending_edit_image"):
-            st.session_state["current_edit_image"] = st.session_state["_pending_edit_image"]
+            pending_image = st.session_state["_pending_edit_image"]
+            if pending_image and isinstance(pending_image, str):
+                st.session_state["current_edit_image"] = pending_image
             st.session_state.pop("_pending_edit_image", None)
         
         active_img = st.session_state.get("current_edit_image")
@@ -708,17 +816,31 @@ def render_sidebar():
             
             # Create the selectbox with the current value
             try:
+                # Validate index bounds
+                index = 0
+                if active_img in options_names:
+                    index = options_names.index(active_img)
+                elif options_names:
+                    index = 0
+                
                 selected = st.sidebar.selectbox(
                     "Editing image",
                     options=options_names,
-                    index=options_names.index(active_img) if active_img in options_names else 0,
+                    index=index,
                     key="current_edit_image",
                 )
                 st.session_state["_edit_image_widget_instantiated"] = True
                 active_img = selected
-                _ensure_per_image_zone_containers(selected)
+                if selected:
+                    _ensure_per_image_zone_containers(selected)
+            except (ValueError, IndexError) as e:
+                # Handle specific index/value errors
+                st.error(f"Invalid image selection: {e}")
+                if options_names:
+                    active_img = options_names[0]
+                    st.session_state["current_edit_image"] = active_img
             except Exception as e:
-                # If there's an error with the selectbox, use the first option
+                # Handle other unexpected errors
                 st.error(f"Error with image selector: {e}")
                 if options_names:
                     active_img = options_names[0]
@@ -785,7 +907,7 @@ def render_sidebar():
                         # Per-image default identity must be based on index for now
                         is_default = False
 
-                        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+                        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
                         with col1:
                             hidden = id(item) in hidden_set
                             if st.button("Hide" if not hidden else "👁️ Show", key=f"toggle_hide_tz_{active_img}_{i}"):
@@ -810,9 +932,6 @@ def render_sidebar():
                         with col4:
                             if st.button("Move Down", key=f"move_down_text_zone_{active_img}_{i}"):
                                 update_text_zone(i, zx, min(1.0 - zh, zy + 0.02), zw, zh)
-                        with col5:
-                            if (not is_default) and st.button("❌ Delete", key=f"del_text_zone_{active_img}_{i}"):
-                                delete_text_zone(i)
 
                         # Y-axis expand/shrink controls
                         col_e, col_f = st.columns(2)
@@ -903,21 +1022,42 @@ def render_sidebar():
                             zone_data[3])
                         st.write(f"{i + 1}: **{name}** → (x={zx:.4f}, y={zy:.4f}, w={zw:.4f}, h={zh:.4f})")
 
-                        col_a, col_b, col_c, col_d, col_e = st.columns(5)
+                        # Get hidden state for ignore zones
+                        hidden_ignore_set = st.session_state._hidden_ignore_zone_ids_by_image.get(active_img, set()) if active_img else st.session_state._hidden_ignore_zone_indices
+                        
+                        # Use a more responsive 3x2 grid layout for better spacing
+                        col_a, col_b, col_c = st.columns(3)
                         with col_a:
+                            hidden = id(item) in hidden_ignore_set
+                            if st.button("Hide" if not hidden else "👁️ Show", key=f"toggle_hide_iz_{active_img}_{i}"):
+                                if active_img:
+                                    s = st.session_state._hidden_ignore_zone_ids_by_image.setdefault(active_img, set())
+                                    if hidden:
+                                        s.discard(id(item))
+                                    else:
+                                        s.add(id(item))
+                                else:
+                                    if hidden:
+                                        st.session_state._hidden_ignore_zone_indices.discard(id(item))
+                                    else:
+                                        st.session_state._hidden_ignore_zone_indices.add(id(item))
+                                _reprocess_from_cache()
+                        with col_b:
                             if st.button("❌ Delete", key=f"del_ignore_zone_{active_img}_{i}"):
                                 delete_ignore_zone(i)
-                        with col_b:
+                        with col_c:
                             if st.button("Move Up", key=f"move_up_ignore_zone_{active_img}_{i}"):
                                 update_ignore_zone(i, zx, max(0.0, zy - 0.02), zw, zh)
-                        with col_c:
+                        
+                        col_d, col_e, col_f = st.columns(3)
+                        with col_d:
                             if st.button("Move Down", key=f"move_down_ignore_zone_{active_img}_{i}"):
                                 update_ignore_zone(i, zx, min(1.0 - zh, zy + 0.02), zw, zh)
-                        with col_d:
+                        with col_e:
                             if st.button("Size Up", key=f"expand_ignore_zone_{active_img}_{i}"):
                                 new_h = min(1.0 - zy, zh + 0.02)
                                 update_ignore_zone(i, zx, zy, zw, new_h)
-                        with col_e:
+                        with col_f:
                             if st.button("Size Down", key=f"shrink_ignore_zone_{active_img}_{i}"):
                                 new_h = max(0.0, zh - 0.02)
                                 update_ignore_zone(i, zx, zy, zw, new_h)
@@ -1035,6 +1175,8 @@ def render_process_mode():
 
             # store batch cache for redraws
             st.session_state["_cached_batch"] = cached_batch
+            # Clean up memory after processing
+            cleanup_cache()
             status_text.text("✅ Processing complete!")
             st.success(f"Processed {len(st.session_state.batch_results)} image(s)")
 
@@ -1303,10 +1445,13 @@ def main():
 
         # Render sidebar
         render_sidebar()
-        #1
+        
         # Render main content based on mode
         if st.session_state.current_mode == "process":
             render_process_mode()
+
+        # Clean up memory periodically
+        cleanup_cache()
 
     except Exception as e:
         st.error(f"Application error: {e}")

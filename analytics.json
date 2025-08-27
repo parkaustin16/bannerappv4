@@ -2442,5 +2442,122 @@
             1078
         ],
         "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:23.142767",
+        "filename": "de_1.png",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.9832339286804199,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:35.317442",
+        "filename": "de_1.png",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.9092507362365723,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:40.844903",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 4.581787586212158,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:44.878573",
+        "filename": "de_1.png",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.535771131515503,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:47.499410",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.6936893463134766,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:32:49.999469",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.4658560752868652,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:43:27.032650",
+        "filename": "de_3.png",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.571073055267334,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:43:34.065457",
+        "filename": "de_4.png",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 2.7749807834625244,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-27T11:43:36.803796",
+        "filename": "de_2.png",
+        "score": 0,
+        "infractions": 25,
+        "aspect_ratio_valid": true,
+        "processing_time": 1.6881115436553955,
+        "image_size": [
+            2872,
+            1078
+        ],
+        "zones_used": 1
     }
 ]
