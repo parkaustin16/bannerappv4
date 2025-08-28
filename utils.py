@@ -388,7 +388,7 @@ def generate_pdf_report(results: List[Dict]) -> Optional[bytes]:
             metrics_tbl = Table(metrics_data, colWidths=[110, 120])
             metrics_tbl.setStyle(TableStyle([
                 ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
+                ('BACKGROUND', (0, 0), (0, -1), colors.whitesmoke),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                 ('LEFTPADDING', (0, 0), (-1, -1), 6),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 6),

@@ -744,6 +744,14 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
                 in_ignore_zone = True
                 break
         if in_ignore_zone:
+            # Still record the infraction but mark it as ignored
+            msg = "Text in ignored zone"
+            # Store infraction coordinates for later use
+            norm_x = tx / w
+            norm_y = ty / h
+            norm_w = tw / w
+            norm_h = th / h
+            penalties.append((msg, detected_text, 0, (norm_x, norm_y, norm_w, norm_h)))  # 0 points for ignored
             continue
 
         # Check overlap with text zones
@@ -993,6 +1001,35 @@ def render_analytics_dashboard():
 def render_sidebar():
     """Render the sidebar with all controls."""
     try:
+        # Ensure all session state is properly initialized before creating any widgets
+        if "text_zones" not in st.session_state:
+            st.session_state.text_zones = []
+        if "ignore_zones" not in st.session_state:
+            st.session_state.ignore_zones = []
+        if "persistent_ignore_terms" not in st.session_state:
+            st.session_state.persistent_ignore_terms = []
+        if "overlap_threshold" not in st.session_state:
+            st.session_state.overlap_threshold = 0.75
+        if "zones_by_image" not in st.session_state:
+            st.session_state.zones_by_image = {}
+        if "ignore_zones_by_image" not in st.session_state:
+            st.session_state.ignore_zones_by_image = {}
+        if "_hidden_zone_ids_by_image" not in st.session_state:
+            st.session_state._hidden_zone_ids_by_image = {}
+        if "_hidden_ignore_zone_ids_by_image" not in st.session_state:
+            st.session_state._hidden_ignore_zone_ids_by_image = {}
+        if "_hidden_zone_indices" not in st.session_state:
+            st.session_state._hidden_zone_indices = set()
+        if "_hidden_ignore_zone_indices" not in st.session_state:
+            st.session_state._hidden_ignore_zone_indices = set()
+        
+        # Handle pending edit image updates
+        if "_pending_edit_image" in st.session_state:
+            pending_image = st.session_state["_pending_edit_image"]
+            if pending_image and isinstance(pending_image, str):
+                st.session_state["current_edit_image"] = pending_image
+            st.session_state.pop("_pending_edit_image", None)
+        
         st.sidebar.title("⚙️ Settings")
         # Deferred clear for ignore_input to avoid modifying widget state post-instantiation
         if st.session_state.get("_clear_ignore_input"):
@@ -1010,13 +1047,6 @@ def render_sidebar():
         except Exception:
             options_names = []
 
-        # Apply any pending programmatic image switch BEFORE creating the widget
-        if st.session_state.get("_pending_edit_image"):
-            pending_image = st.session_state["_pending_edit_image"]
-            if pending_image and isinstance(pending_image, str):
-                st.session_state["current_edit_image"] = pending_image
-            st.session_state.pop("_pending_edit_image", None)
-        
         active_img = st.session_state.get("current_edit_image")
         if options_names:
             if not active_img or active_img not in options_names:
@@ -1099,6 +1129,12 @@ def render_sidebar():
                     st.rerun()
 
             # Display saved zones
+            # Ensure active_img is properly set and session state is initialized
+            if not active_img and options_names:
+                active_img = options_names[0]
+                st.session_state["current_edit_image"] = active_img
+                _ensure_per_image_zone_containers(active_img)
+            
             tz_list = st.session_state.zones_by_image.get(active_img, []) if active_img else st.session_state.text_zones
             hidden_set = st.session_state._hidden_zone_ids_by_image.get(active_img, set()) if active_img else st.session_state._hidden_zone_indices
             if tz_list:
@@ -1219,6 +1255,12 @@ def render_sidebar():
                     st.rerun()
 
             # Display saved ignore zones (per-image if active)
+            # Ensure active_img is properly set and session state is initialized for ignore zones
+            if not active_img and options_names:
+                active_img = options_names[0]
+                st.session_state["current_edit_image"] = active_img
+                _ensure_per_image_zone_containers(active_img)
+            
             iz_list = st.session_state.ignore_zones_by_image.get(active_img, []) if active_img else st.session_state.ignore_zones
             if iz_list:
                 st.markdown("**Current Ignore Zones:**")
@@ -1459,7 +1501,7 @@ def render_process_mode():
         is_single = len(st.session_state.batch_results) == 1
 
         if is_single:
-            # Single image display
+            # Single image display - show only this section
             result = st.session_state.batch_results[0]
 
             col1, col2 = st.columns([3, 1])
@@ -1512,14 +1554,20 @@ def render_process_mode():
 
             with col2:
                 if st.button("📄 Export as PDF"):
-                    pdf_data = generate_pdf_report([result])
-                    if pdf_data:
-                        st.download_button(
-                            label="Download PDF",
-                            data=pdf_data,
-                            file_name=f"banner_qa_{result['filename']}.pdf",
-                            mime="application/pdf"
-                        )
+                    try:
+                        with st.spinner("Generating PDF report..."):
+                            pdf_data = generate_pdf_report([result])
+                        if pdf_data:
+                            st.download_button(
+                                label="Download PDF",
+                                data=pdf_data,
+                                file_name=f"banner_qa_{result['filename']}.pdf",
+                                mime="application/pdf"
+                            )
+                        else:
+                            st.error("Failed to generate PDF report")
+                    except Exception as e:
+                        st.error(f"PDF export failed: {e}")
 
             # Excel export with embedded annotated image for single image
             if st.button("📊 Export as Excel (XLSX)"):
@@ -1538,7 +1586,7 @@ def render_process_mode():
                     st.error(f"Excel export failed: {e}")
 
         else:
-            # Multiple images display (batch mode)
+            # Multiple images display (batch mode) - show only this section
             st.subheader("📊 Batch Results")
 
             # Summary metrics
@@ -1701,14 +1749,20 @@ def render_process_mode():
 
             with col2:
                 if st.button("📄 Export as PDF"):
-                    pdf_data = generate_pdf_report(st.session_state.batch_results)
-                    if pdf_data:
-                        st.download_button(
-                            label="Download PDF Report",
-                            data=pdf_data,
-                            file_name=f"batch_qa_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf"
-                        )
+                    try:
+                        with st.spinner("Generating PDF report..."):
+                            pdf_data = generate_pdf_report(st.session_state.batch_results)
+                        if pdf_data:
+                            st.download_button(
+                                label="Download PDF Report",
+                                data=pdf_data,
+                                file_name=f"batch_qa_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf"
+                            )
+                        else:
+                            st.error("Failed to generate PDF report")
+                    except Exception as e:
+                        st.error(f"PDF export failed: {e}")
 
             # Excel export for batch
             if st.button("📊 Export Batch as Excel (XLSX)"):
