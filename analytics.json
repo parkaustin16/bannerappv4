@@ -4067,5 +4067,44 @@
             514
         ],
         "zones_used": 3
+    },
+    {
+        "timestamp": "2025-08-28T13:55:09.529800",
+        "filename": "ausbna.PNG",
+        "score": 55,
+        "infractions": 9,
+        "aspect_ratio_valid": false,
+        "processing_time": 0.29764437675476074,
+        "image_size": [
+            1908,
+            711
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-28T13:55:10.173564",
+        "filename": "ausbna1.PNG",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.20462679862976074,
+        "image_size": [
+            1538,
+            578
+        ],
+        "zones_used": 4
+    },
+    {
+        "timestamp": "2025-08-28T13:55:12.223320",
+        "filename": "ausbna2.PNG",
+        "score": 85,
+        "infractions": 3,
+        "aspect_ratio_valid": false,
+        "processing_time": 0.4733150005340576,
+        "image_size": [
+            1920,
+            717
+        ],
+        "zones_used": 2
     }
 ]
