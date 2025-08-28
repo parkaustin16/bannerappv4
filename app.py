@@ -898,16 +898,18 @@ def _reprocess_from_cache():
 # --- UI Components ---
 def render_header():
     """Render the main header with mode selection."""
+    # Modern header with gradient background
     st.title("🎯 Banner QA - Text Zones")
 
-    # Mode selection
+    # Mode selection with modern styling
+    st.markdown("### 🚀 Quick Actions")
     col1, col2 = st.columns([1, 1])
     with col1:
         if st.button("📄 Process Images", use_container_width=True):
             st.session_state.current_mode = "process"
             st.session_state.show_analytics = False  # Hide analytics when switching to process mode
     with col2:
-        if st.button("📊 Analytics Dashboard", use_container_width=True):
+        if st.button("📊 Analytics Dashboard", use_container_width=True, type="secondary"):
             st.session_state.show_analytics = not st.session_state.show_analytics
 
     st.markdown("---")
@@ -1384,13 +1386,14 @@ def render_process_mode():
     """Render the unified image processing mode (single or multiple images)."""
     st.header("📄 Image Processing")
 
-    st.info("💡 **Tip:** You can upload one image or multiple images at once. The system will process them accordingly.")
-
+    # Combined upload area with file uploader functionality
     uploaded_files = st.file_uploader(
-        "Upload banner(s)",
+        "Upload Your Images",
         type=["png", "jpg", "jpeg"],
         accept_multiple_files=True,
-        key="process_upload"
+        key="process_upload",
+        help="Drag and drop files here\nLimit 200MB per file • PNG, JPG, JPEG",
+        label_visibility="collapsed"
     )
 
     if uploaded_files:
@@ -1580,14 +1583,14 @@ def render_process_mode():
 
         else:
             # Multiple images display (batch mode) - show only this section
-            st.subheader("📊 Batch Results")
 
-            # Summary metrics
+            # Summary metrics in modern cards
             total_images = len(st.session_state.batch_results)
             avg_score = sum(r["score"] for r in st.session_state.batch_results) / total_images
             total_infractions = sum(len(r["penalties"]) for r in st.session_state.batch_results)
             success_count = sum(1 for r in st.session_state.batch_results if r["score"] == 100)
 
+            st.subheader("📈 Processing Summary")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Total Images", total_images)
@@ -1599,7 +1602,8 @@ def render_process_mode():
                 st.metric("Perfect Scores", success_count)
 
             # Results table
-            st.subheader("Detailed Results")
+            st.subheader("📋 Detailed Results")
+            
             results_data = []
             for result in st.session_state.batch_results:
                 results_data.append({
@@ -1727,8 +1731,10 @@ def render_process_mode():
                     else:
                         st.success("✅ Perfect score!")
 
+            st.markdown("</div>", unsafe_allow_html=True)
+
             # Export options for batch
-            st.subheader("📤 Export Batch Results")
+            st.markdown("### 📤 Export Batch Results")
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("📊 Export as CSV"):
