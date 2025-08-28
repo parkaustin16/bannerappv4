@@ -744,14 +744,7 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
                 in_ignore_zone = True
                 break
         if in_ignore_zone:
-            # Still record the infraction but mark it as ignored
-            msg = "Text in ignored zone"
-            # Store infraction coordinates for later use
-            norm_x = tx / w
-            norm_y = ty / h
-            norm_w = tw / w
-            norm_h = th / h
-            penalties.append((msg, detected_text, 0, (norm_x, norm_y, norm_w, norm_h)))  # 0 points for ignored
+            # Text in ignore zone - don't count as infraction, just continue
             continue
 
         # Check overlap with text zones
