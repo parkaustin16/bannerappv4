@@ -3976,5 +3976,96 @@
             711
         ],
         "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-28T13:48:06.788825",
+        "filename": "atbna1.PNG",
+        "score": 95,
+        "infractions": 1,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.22176909446716309,
+        "image_size": [
+            1536,
+            576
+        ],
+        "zones_used": 4
+    },
+    {
+        "timestamp": "2025-08-28T13:48:07.862903",
+        "filename": "atbna3.PNG",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 0.3697185516357422,
+        "image_size": [
+            1537,
+            575
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-28T13:48:12.058357",
+        "filename": "ausbna.PNG",
+        "score": 55,
+        "infractions": 9,
+        "aspect_ratio_valid": false,
+        "processing_time": 0.45483899116516113,
+        "image_size": [
+            1908,
+            711
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-28T13:48:33.033675",
+        "filename": "ausbna1.PNG",
+        "score": 80,
+        "infractions": 4,
+        "aspect_ratio_valid": true,
+        "processing_time": 20.45097303390503,
+        "image_size": [
+            1538,
+            578
+        ],
+        "zones_used": 4
+    },
+    {
+        "timestamp": "2025-08-28T13:48:58.721340",
+        "filename": "ausbna2.PNG",
+        "score": 85,
+        "infractions": 3,
+        "aspect_ratio_valid": false,
+        "processing_time": 23.580623388290405,
+        "image_size": [
+            1920,
+            717
+        ],
+        "zones_used": 2
+    },
+    {
+        "timestamp": "2025-08-28T13:49:10.090819",
+        "filename": "banner2처.PNG",
+        "score": 55,
+        "infractions": 9,
+        "aspect_ratio_valid": false,
+        "processing_time": 11.049720525741577,
+        "image_size": [
+            1461,
+            550
+        ],
+        "zones_used": 0
+    },
+    {
+        "timestamp": "2025-08-28T13:49:17.891580",
+        "filename": "banner3.PNG",
+        "score": 75,
+        "infractions": 5,
+        "aspect_ratio_valid": true,
+        "processing_time": 7.433077335357666,
+        "image_size": [
+            1372,
+            514
+        ],
+        "zones_used": 3
     }
 ]
