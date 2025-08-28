@@ -456,6 +456,8 @@ def generate_excel_report(results: List[Dict]) -> Optional[bytes]:
 
     try:
         output = io.BytesIO()
+        image_buffers = []  # Track all image buffers
+        
         try:
             wb = xlsxwriter.Workbook(output)
             ws = wb.add_worksheet("QA Results")
@@ -490,46 +492,63 @@ def generate_excel_report(results: List[Dict]) -> Optional[bytes]:
                     # Get the annotated image
                     annotated_img = result.get("annotated_image")
                     if annotated_img:
+                        # Add image title above the image
+                        filename = result.get("filename", "Unknown")
+                        ws_img.write(row_cursor, 0, f"Image: {filename}")
+                        
                         # Convert PIL Image to bytes
                         img_buf = io.BytesIO()
-                        try:
-                            annotated_img.save(img_buf, format="PNG", optimize=True)
-                            img_buf.seek(0)
-                            
-                            # Insert image with proper scaling
-                            max_width_px = 800  # reasonable width for Excel
-                            iw, ih = annotated_img.size
-                            scale = 1.0
-                            if iw > max_width_px:
-                                scale = max_width_px / float(iw)
-                            
-                            # Insert image with proper options - pass BytesIO object directly
-                            ws_img.insert_image(row_cursor + 1, 0, img_buf, {
-                                'x_scale': scale,
-                                'y_scale': scale,
-                                'x_offset': 5,
-                                'y_offset': 5
-                            })
-                            
-                            # Add some metadata about the image
-                            ws_img.write(row_cursor + 1, 1, f"Score: {result.get('score', 0)}%")
-                            ws_img.write(row_cursor + 1, 2, f"Infractions: {len(result.get('penalties', []))}")
-                            
-                            # Advance cursor by image height in rows (~20 px/row) plus some spacing
-                            row_cursor += int((ih * scale) / 20) + 6
-                        finally:
-                            img_buf.close()
+                        image_buffers.append(img_buf)  # Track this buffer
+                        
+                        annotated_img.save(img_buf, format="PNG", optimize=True)
+                        img_buf.seek(0)
+                        
+                        # Insert image with proper scaling
+                        max_width_px = 800  # reasonable width for Excel
+                        iw, ih = annotated_img.size
+                        scale = 1.0
+                        if iw > max_width_px:
+                            scale = max_width_px / float(iw)
+                        
+                        # Insert image with proper options - pass BytesIO object directly
+                        ws_img.insert_image(row_cursor + 1, 0, img_buf, {
+                            'x_scale': scale,
+                            'y_scale': scale,
+                            'x_offset': 5,
+                            'y_offset': 5
+                        })
+                        
+                        # Add some metadata about the image
+                        ws_img.write(row_cursor + 1, 1, f"Score: {result.get('score', 0)}%")
+                        ws_img.write(row_cursor + 1, 2, f"Infractions: {len(result.get('penalties', []))}")
+                        
+                        # Advance cursor by image height in rows (~20 px/row) plus some spacing
+                        row_cursor += int((ih * scale) / 20) + 7  # +1 for title row
                     else:
-                        row_cursor += 2
+                        # Add title even if no image
+                        filename = result.get("filename", "Unknown")
+                        ws_img.write(row_cursor, 0, f"Image: {filename} (No image available)")
+                        row_cursor += 3
                 except Exception as e:
                     # If image insertion fails, still add the filename and error info
+                    filename = result.get("filename", "Unknown")
+                    ws_img.write(row_cursor, 0, f"Image: {filename}")
                     ws_img.write(row_cursor + 1, 1, f"Error inserting image: {str(e)}")
-                    row_cursor += 4
+                    row_cursor += 5
 
             wb.close()
             output.seek(0)
-            return output.getvalue()
+            result_data = output.getvalue()
+            
+            return result_data
+            
         finally:
+            # Clean up all image buffers after workbook is closed
+            for img_buf in image_buffers:
+                try:
+                    img_buf.close()
+                except:
+                    pass
             output.close()
     except Exception as e:
         st.error(f"Error generating Excel report: {e}")
