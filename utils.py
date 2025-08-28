@@ -62,15 +62,24 @@ def validate_image_aspect_ratio(img: Image.Image, target_ratio: float = 8 / 3, t
     return is_valid, aspect_ratio
 
 
-def resize_image_for_display(img: Image.Image, max_width: int = 800) -> Image.Image:
+def resize_image_for_display(img: Image.Image, max_width: int = 800) -> bytes:
     """Resize image for display while maintaining aspect ratio."""
-    w, h = img.size
-    if w > max_width:
-        ratio = max_width / w
-        new_w = int(w * ratio)
-        new_h = int(h * ratio)
-        return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    return img
+    img_bytes = io.BytesIO()
+    try:
+        # Calculate new dimensions
+        w, h = img.size
+        if w > max_width:
+            new_w = max_width
+            new_h = int(h * (max_width / w))
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        else:
+            img_resized = img
+        
+        # Save to bytes
+        img_resized.save(img_bytes, format="PNG", optimize=True)
+        return img_bytes.getvalue()
+    finally:
+        img_bytes.close()
 
 
 def create_zone_preview_image(img: Image.Image, zones: List[Dict], ignore_zones: List[Dict]) -> Image.Image:
@@ -156,15 +165,8 @@ def generate_csv_report(results: List[Dict]) -> str:
     return csv
 
 
-def generate_pdf_report(results: List[Dict]) -> bytes:
-    """Generate a PDF report with a layout inspired by the provided reference.
-
-    Page layout (per image):
-    - Top tag-style header with the filename in gray rounded rectangle
-    - Two-column body: annotated image on the left, metrics on the right
-    - AI disclaimer at the bottom
-    - A dark guideline panel with infractions at the bottom of the page
-    """
+def generate_pdf_report(results: List[Dict]) -> Optional[bytes]:
+    """Generate a PDF report for the QA results."""
     try:
         from reportlab.lib.pagesizes import letter, landscape
         from reportlab.platypus import (
@@ -265,7 +267,7 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             fontSize=8, leading=10, textColor=colors.grey,
             alignment=1  # Center alignment
         )
-        disclaimer_text = "⚠️ DISCLAIMER: All results are analyzed by AI and may not always be 100% accurate. This report is for guidance purposes only and should be reviewed by human operators for final validation."
+        disclaimer_text = "DISCLAIMER: All results are analyzed by AI and may not always be 100% accurate. This report is for guidance purposes only and should be reviewed by human operators for final validation."
         elements.append(Spacer(1, 20))
         elements.append(Paragraph(disclaimer_text, disclaimer_style))
         elements.append(PageBreak())
@@ -376,8 +378,6 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             except Exception:
                 pass
 
-            # Removed blue disclaimer callout per request
-
             # Right panel with metrics + infractions
             metrics_data = [
                 ['Score', f"{result.get('score', 0)}%"],
@@ -418,22 +418,24 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
             detailed_penalties = result.get('penalties', [])
             lines = []
             if detailed_penalties:
-                for p in detailed_penalties:
+                for i, p in enumerate(detailed_penalties, 1):
                     try:
-                        if len(p) == 3:
+                        if len(p) >= 4:
+                            msg, txt, pts = p[0], p[1], p[2]
+                        elif len(p) == 3:
                             msg, txt, pts = p
                         else:
                             msg, pts = p
                             txt = ''
-                        line = msg
+                        line = f"{i}. {msg}"
                         if txt:
-                            line += f" – '{txt}'"
+                            line += f": '{txt}'"
                         line += f" ({pts})"
                         lines.append(line)
                     except Exception:
                         continue
             else:
-                lines.append('No infractions – perfect score.')
+                lines.append('No infractions - perfect score.')
 
             elements.append(InfractionsPanel(lines, doc.width))
 
@@ -444,74 +446,94 @@ def generate_pdf_report(results: List[Dict]) -> bytes:
         return b""
 
 
-def generate_excel_report(results: List[Dict]) -> bytes:
-    """Generate an Excel (.xlsx) report with a summary sheet and embedded annotated images."""
+def generate_excel_report(results: List[Dict]) -> Optional[bytes]:
+    """Generate an Excel report with embedded annotated images."""
     try:
         import xlsxwriter
-        output = io.BytesIO()
-        wb = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = wb.add_worksheet('Summary')
-
-        # Header
-        headers = ['Filename', 'Score', 'Infractions', 'Aspect Ratio', 'Processing Time (s)']
-        for col, h in enumerate(headers):
-            ws.write(0, col, h)
-
-        # Rows
-        for row, result in enumerate(results, start=1):
-            ws.write(row, 0, result.get('filename', 'Unknown'))
-            ws.write(row, 1, result.get('score', 0))
-            ws.write(row, 2, len(result.get('penalties', [])))
-            ws.write(row, 3, result.get('aspect_ratio', 0.0))
-            ws.write(row, 4, float(result.get('processing_time', 0.0)))
-
-        # Create an Images sheet and insert each annotated image
-        ws_img = wb.add_worksheet('Images')
-        row_cursor = 0
-        for idx, result in enumerate(results, start=1):
-            ws_img.write(row_cursor, 0, f"{idx}. {result.get('filename', 'Unknown')}")
-            try:
-                img = result.get('annotated_image')
-                if img is not None:
-                    # Convert to PNG bytes
-                    img_buf = io.BytesIO()
-                    img.save(img_buf, format='PNG')
-                    img_buf.seek(0)
-                    
-                    # Insert image with proper scaling
-                    max_width_px = 800  # reasonable width for Excel
-                    iw, ih = img.size
-                    scale = 1.0
-                    if iw > max_width_px:
-                        scale = max_width_px / float(iw)
-                    
-                    # Insert image with proper options - pass BytesIO object directly
-                    ws_img.insert_image(row_cursor + 1, 0, img_buf, {
-                        'x_scale': scale,
-                        'y_scale': scale,
-                        'x_offset': 5,
-                        'y_offset': 5
-                    })
-                    
-                    # Add some metadata about the image
-                    ws_img.write(row_cursor + 1, 1, f"Score: {result.get('score', 0)}%")
-                    ws_img.write(row_cursor + 1, 2, f"Infractions: {len(result.get('penalties', []))}")
-                    
-                    # Advance cursor by image height in rows (~20 px/row) plus some spacing
-                    row_cursor += int((ih * scale) / 20) + 6
-                else:
-                    row_cursor += 2
-            except Exception as e:
-                # If image insertion fails, still add the filename and error info
-                ws_img.write(row_cursor + 1, 1, f"Error inserting image: {str(e)}")
-                row_cursor += 4
-
-        wb.close()
-        output.seek(0)
-        return output.getvalue()
     except ImportError:
         st.error("XlsxWriter not installed. Install with: pip install XlsxWriter")
-        return b""
+        return None
+
+    try:
+        output = io.BytesIO()
+        try:
+            wb = xlsxwriter.Workbook(output)
+            ws = wb.add_worksheet("QA Results")
+            
+            # Set up formats
+            header_format = wb.add_format({
+                'bold': True,
+                'bg_color': '#4F81BD',
+                'font_color': 'white',
+                'border': 1
+            })
+            
+            # Write headers
+            headers = ["Filename", "Score", "Infractions", "Processing Time", "Aspect Ratio"]
+            for col, header in enumerate(headers):
+                ws.write(0, col, header, header_format)
+            
+            # Write data
+            for row, result in enumerate(results, start=1):
+                ws.write(row, 0, result["filename"])
+                ws.write(row, 1, f"{result['score']}%")
+                ws.write(row, 2, len(result["penalties"]))
+                ws.write(row, 3, f"{result['processing_time']:.2f}s")
+                ws.write(row, 4, f"{result['aspect_ratio']:.2f}")
+            
+            # Add annotated images
+            ws_img = wb.add_worksheet("Annotated Images")
+            row_cursor = 0
+            
+            for result in results:
+                try:
+                    # Get the annotated image
+                    annotated_img = result.get("annotated_image")
+                    if annotated_img:
+                        # Convert PIL Image to bytes
+                        img_buf = io.BytesIO()
+                        try:
+                            annotated_img.save(img_buf, format="PNG", optimize=True)
+                            img_buf.seek(0)
+                            
+                            # Insert image with proper scaling
+                            max_width_px = 800  # reasonable width for Excel
+                            iw, ih = annotated_img.size
+                            scale = 1.0
+                            if iw > max_width_px:
+                                scale = max_width_px / float(iw)
+                            
+                            # Insert image with proper options - pass BytesIO object directly
+                            ws_img.insert_image(row_cursor + 1, 0, img_buf, {
+                                'x_scale': scale,
+                                'y_scale': scale,
+                                'x_offset': 5,
+                                'y_offset': 5
+                            })
+                            
+                            # Add some metadata about the image
+                            ws_img.write(row_cursor + 1, 1, f"Score: {result.get('score', 0)}%")
+                            ws_img.write(row_cursor + 1, 2, f"Infractions: {len(result.get('penalties', []))}")
+                            
+                            # Advance cursor by image height in rows (~20 px/row) plus some spacing
+                            row_cursor += int((ih * scale) / 20) + 6
+                        finally:
+                            img_buf.close()
+                    else:
+                        row_cursor += 2
+                except Exception as e:
+                    # If image insertion fails, still add the filename and error info
+                    ws_img.write(row_cursor + 1, 1, f"Error inserting image: {str(e)}")
+                    row_cursor += 4
+
+            wb.close()
+            output.seek(0)
+            return output.getvalue()
+        finally:
+            output.close()
+    except Exception as e:
+        st.error(f"Error generating Excel report: {e}")
+        return None
 
 
 def get_download_link(data: bytes, filename: str, text: str) -> str:

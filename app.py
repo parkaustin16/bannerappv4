@@ -254,6 +254,33 @@ def _safe_set_current_edit_image(name: str):
         except Exception:
             st.error("Failed to set pending edit image")
 
+def monitor_memory_usage():
+    """Monitor and log memory usage for debugging."""
+    try:
+        import gc
+        
+        # Force garbage collection to get more accurate memory info
+        gc.collect()
+        
+        # Get rough memory estimate from session state size
+        session_size = 0
+        for key, value in st.session_state.items():
+            try:
+                session_size += len(str(value))
+            except:
+                pass
+        
+        # Convert to MB (rough estimate)
+        memory_mb = session_size / 1024 / 1024
+        
+        if memory_mb > 100:  # Lower threshold for session-based monitoring
+            st.warning(f"Large session state detected: {memory_mb:.1f}MB (estimated)")
+        
+        return memory_mb
+    except Exception:
+        # Don't fail if monitoring fails
+        return None
+
 def cleanup_cache():
     """Clean up cached data to prevent memory leaks"""
     try:
@@ -266,6 +293,35 @@ def cleanup_cache():
         if "_cached_img_bytes" in st.session_state and len(st.session_state["_cached_img_bytes"]) > 10 * 1024 * 1024:  # 10MB limit
             st.session_state.pop("_cached_img_bytes", None)
             st.session_state.pop("_cached_img_name", None)
+        
+        # Clean up old batch results to prevent memory bloat
+        batch_results = st.session_state.get("batch_results", [])
+        if len(batch_results) > 100:  # Limit to 100 results
+            st.session_state["batch_results"] = batch_results[-50:]  # Keep last 50
+        
+        # Clean up per-image zones for old images
+        zones_by_image = st.session_state.get("zones_by_image", {})
+        ignore_zones_by_image = st.session_state.get("ignore_zones_by_image", {})
+        hidden_zone_ids = st.session_state.get("_hidden_zone_ids_by_image", {})
+        hidden_ignore_zone_ids = st.session_state.get("_hidden_ignore_zone_ids_by_image", {})
+        
+        # Keep only zones for images that are still in batch results
+        current_filenames = {r.get("filename") for r in batch_results if r.get("filename")}
+        
+        # Clean up zones for images no longer in results
+        for img_key in list(zones_by_image.keys()):
+            if img_key not in current_filenames:
+                zones_by_image.pop(img_key, None)
+                ignore_zones_by_image.pop(img_key, None)
+                hidden_zone_ids.pop(img_key, None)
+                hidden_ignore_zone_ids.pop(img_key, None)
+        
+        # Update session state with cleaned data
+        st.session_state["zones_by_image"] = zones_by_image
+        st.session_state["ignore_zones_by_image"] = ignore_zones_by_image
+        st.session_state["_hidden_zone_ids_by_image"] = hidden_zone_ids
+        st.session_state["_hidden_ignore_zone_ids_by_image"] = hidden_ignore_zone_ids
+        
     except Exception as e:
         # Don't show error for cleanup failures, just log
         pass
@@ -308,8 +364,10 @@ def add_text_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
             _reprocess_from_cache()
         except (ValueError, TypeError) as e:
             st.error(f"Invalid data during reprocessing: {e}")
+        except (OSError, IOError) as e:
+            st.error(f"File/IO error during reprocessing: {e}")
         except Exception as e:
-            st.error(f"Error during reprocessing: {e}")
+            st.error(f"Unexpected error during reprocessing: {e}")
         return True
     except Exception as e:
         st.error(f"Error adding text zone: {e}")
@@ -343,8 +401,10 @@ def delete_text_zone(index: int) -> bool:
                 _reprocess_from_cache()
             except (ValueError, TypeError) as e:
                 st.error(f"Invalid data during reprocessing: {e}")
+            except (OSError, IOError) as e:
+                st.error(f"File/IO error during reprocessing: {e}")
             except Exception as e:
-                st.error(f"Error during reprocessing: {e}")
+                st.error(f"Unexpected error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -381,8 +441,10 @@ def update_text_zone(index: int, x: float, y: float, w: float, h: float) -> bool
                 _reprocess_from_cache()
             except (ValueError, TypeError) as e:
                 st.error(f"Invalid data during reprocessing: {e}")
+            except (OSError, IOError) as e:
+                st.error(f"File/IO error during reprocessing: {e}")
             except Exception as e:
-                st.error(f"Error during reprocessing: {e}")
+                st.error(f"Unexpected error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -426,8 +488,10 @@ def add_ignore_zone(name: str, x: float, y: float, w: float, h: float) -> bool:
             _reprocess_from_cache()
         except (ValueError, TypeError) as e:
             st.error(f"Invalid data during reprocessing: {e}")
+        except (OSError, IOError) as e:
+            st.error(f"File/IO error during reprocessing: {e}")
         except Exception as e:
-            st.error(f"Error during reprocessing: {e}")
+            st.error(f"Unexpected error during reprocessing: {e}")
         return True
     except Exception as e:
         st.error(f"Error adding ignore zone: {e}")
@@ -461,8 +525,10 @@ def delete_ignore_zone(index: int) -> bool:
                 _reprocess_from_cache()
             except (ValueError, TypeError) as e:
                 st.error(f"Invalid data during reprocessing: {e}")
+            except (OSError, IOError) as e:
+                st.error(f"File/IO error during reprocessing: {e}")
             except Exception as e:
-                st.error(f"Error during reprocessing: {e}")
+                st.error(f"Unexpected error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -564,8 +630,10 @@ def update_ignore_zone(index: int, x: float, y: float, w: float, h: float) -> bo
                 _reprocess_from_cache()
             except (ValueError, TypeError) as e:
                 st.error(f"Invalid data during reprocessing: {e}")
+            except (OSError, IOError) as e:
+                st.error(f"File/IO error during reprocessing: {e}")
             except Exception as e:
-                st.error(f"Error during reprocessing: {e}")
+                st.error(f"Unexpected error during reprocessing: {e}")
             return True
         return False
     except Exception as e:
@@ -643,8 +711,11 @@ def process_image(img: Image.Image, ocr_reader, overlap_threshold: float, filena
 
     # Prepare image for OCR (use original image, not annotated)
     img_bytes_io = io.BytesIO()
-    img.save(img_bytes_io, format="PNG")
-    img_bytes = img_bytes_io.getvalue()
+    try:
+        img.save(img_bytes_io, format="PNG")
+        img_bytes = img_bytes_io.getvalue()
+    finally:
+        img_bytes_io.close()
 
     # Run OCR with caching
     image_hash = get_image_hash(img)
@@ -798,6 +869,8 @@ def _reprocess_from_cache():
             result = process_image(img, reader, st.session_state.overlap_threshold,
                                    st.session_state.get("_cached_img_name", "Cached"), log_analytics=False)
             st.session_state.batch_results = [result]
+            # Clean up PIL Image object
+            img.close()
         except Exception:
             pass
         return
@@ -814,6 +887,8 @@ def _reprocess_from_cache():
             res = process_image(img, reader, st.session_state.overlap_threshold,
                                 entry.get("name", "Cached"), log_analytics=False)
             new_results.append(res)
+            # Clean up PIL Image object
+            img.close()
         st.session_state.batch_results = new_results
     except Exception:
         pass
@@ -1329,8 +1404,12 @@ def render_process_mode():
                     
                     # cache original bytes for redraws
                     raw_buf = io.BytesIO()
-                    img.save(raw_buf, format="PNG", optimize=True)
-                    raw_bytes = raw_buf.getvalue()
+                    try:
+                        img.save(raw_buf, format="PNG", optimize=True)
+                        raw_bytes = raw_buf.getvalue()
+                    finally:
+                        raw_buf.close()
+                    
                     st.session_state["_cached_img_bytes"] = raw_bytes
                     st.session_state["_cached_img_name"] = uploaded_file.name
                     # do not mutate dropdown-bound key in the same run; defer
@@ -1341,8 +1420,19 @@ def render_process_mode():
                     cached_batch.append({"bytes": raw_bytes, "name": uploaded_file.name})
                     result = process_image(img, ocr_reader, st.session_state.overlap_threshold, uploaded_file.name)
                     st.session_state.batch_results.append(result)
+                    # Clean up PIL Image object
+                    img.close()
                 except Exception as e:
                     st.error(f"Error processing {uploaded_file.name}: {e}")
+                    # Ensure cleanup even on error
+                    try:
+                        img.close()
+                    except (NameError, AttributeError):
+                        # img might not be defined if error occurred before assignment
+                        pass
+                    except Exception as cleanup_error:
+                        # Don't show cleanup errors to user
+                        pass
 
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
@@ -1356,8 +1446,12 @@ def render_process_mode():
             # Immediately update the drawing to show numbered labels
             try:
                 _reprocess_from_cache()
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 st.warning(f"Could not update drawing immediately: {e}")
+            except (OSError, IOError) as e:
+                st.warning(f"File/IO error during drawing update: {e}")
+            except Exception as e:
+                st.warning(f"Unexpected error during drawing update: {e}")
 
     # Display results
     if st.session_state.batch_results:
@@ -1503,8 +1597,12 @@ def render_process_mode():
                         _ensure_per_image_zone_containers(selected_image)
                         try:
                             _reprocess_from_cache()
-                        except Exception:
-                            pass
+                        except (ValueError, TypeError) as e:
+                            st.error(f"Invalid data during reprocessing: {e}")
+                        except (OSError, IOError) as e:
+                            st.error(f"File/IO error during reprocessing: {e}")
+                        except Exception as e:
+                            st.error(f"Unexpected error during reprocessing: {e}")
                         active = selected_image
                 
                 with col2:
@@ -1522,8 +1620,12 @@ def render_process_mode():
                                 _ensure_per_image_zone_containers(prev_image)
                                 try:
                                     _reprocess_from_cache()
-                                except Exception:
-                                    pass
+                                except (ValueError, TypeError) as e:
+                                    st.error(f"Invalid data during reprocessing: {e}")
+                                except (OSError, IOError) as e:
+                                    st.error(f"File/IO error during reprocessing: {e}")
+                                except Exception as e:
+                                    st.error(f"Unexpected error during reprocessing: {e}")
                     with nav_col2:
                         if st.button("Next ➡️", key="next_img_btn"):
                             current_idx = names.index(active)
@@ -1533,8 +1635,12 @@ def render_process_mode():
                                 _ensure_per_image_zone_containers(next_image)
                                 try:
                                     _reprocess_from_cache()
-                                except Exception:
-                                    pass
+                                except (ValueError, TypeError) as e:
+                                    st.error(f"Invalid data during reprocessing: {e}")
+                                except (OSError, IOError) as e:
+                                    st.error(f"File/IO error during reprocessing: {e}")
+                                except Exception as e:
+                                    st.error(f"Unexpected error during reprocessing: {e}")
 
             # Render only the active image panel
             active_result = next((r for r in st.session_state.batch_results if r["filename"] == active), None)
@@ -1646,6 +1752,9 @@ def main():
 
         # Clean up memory periodically
         cleanup_cache()
+        
+        # Monitor memory usage
+        monitor_memory_usage()
 
     except Exception as e:
         st.error(f"Application error: {e}")
