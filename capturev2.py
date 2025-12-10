@@ -132,9 +132,9 @@ def extract_text_from_banner(html: str) -> dict:
     }
 
 
-async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item") -> tuple:
+async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item", banner_index: int = 0) -> tuple:
     """
-    Capture a screenshot of a banner element with aspect ratio validation.
+    Capture a screenshot of a specific banner element with aspect ratio validation.
     
     Only captures desktop banners with aspect ratio of 8:3 (±10%).
     Uses Playwright to render the page and capture the banner area including all text.
@@ -142,6 +142,7 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
     Args:
         url: The website URL
         banner_selector: CSS selector for the banner element
+        banner_index: Index of the banner to capture (0 for first, 1 for second, etc.)
     
     Returns:
         Tuple of (width, height, screenshot_bytes, valid) or (0, 0, None, False) if capture fails
@@ -164,18 +165,21 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                 # Navigate to URL with timeout
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 
-                # Wait for banner to be visible
+                # Wait for banner selector to be visible
                 try:
                     await page.wait_for_selector(banner_selector, timeout=5000)
                 except:
-                    print(f"⚠ Banner selector '{banner_selector}' not found, using first carousel item")
+                    print(f"⚠ Banner selector '{banner_selector}' not found")
                 
-                # Get banner element
-                banner_element = await page.query_selector(banner_selector)
-                if not banner_element:
-                    print("⚠ No banner element found")
+                # Get all banner elements matching selector
+                banner_elements = await page.query_selector_all(banner_selector)
+                if not banner_elements or banner_index >= len(banner_elements):
+                    print(f"⚠ Banner index {banner_index} not found (total banners: {len(banner_elements)})")
                     await browser.close()
                     return (0, 0, None, False)
+                
+                # Get the specific banner element at the given index
+                banner_element = banner_elements[banner_index]
                 
                 # Get banner bounding box
                 bbox = await banner_element.bounding_box()
@@ -564,7 +568,8 @@ async def crawl_url(url: str) -> CrawlResult:
         
         for i, banner in enumerate(banners):
             try:
-                width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item")
+                # Pass the banner index to capture the correct banner on the page
+                width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item", banner_index=i)
                 
                 if not valid:
                     print(f"  ⊘ Skipped {banner['dataTitle']}: invalid aspect ratio or dimensions")
