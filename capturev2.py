@@ -195,15 +195,10 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
     """
     Extract banner HTML and associated images from carousel items.
     
-    LG.com structure uses:
-    - div.cmp-carousel__item: Container for each banner
-    - data-title attribute: Banner identifier
-    - div.cmp-container: Banner content wrapper
-    - picture > source: Responsive images with media queries
-    
-    For each banner, extracts:
-    - Desktop image: source with media="(min-width: 769px)"
-    - Mobile image: source with media="(max-width: 768px)"
+    Supports multiple banner structures:
+    1. LG.com structure: div.cmp-carousel__item with picture > source
+    2. Generic carousel: Any div with picture > source tags
+    3. Picture tags: Any responsive image with media queries
     
     Args:
         html: Complete HTML content of the page
@@ -214,18 +209,73 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
     """
     banners = []
     
-    # Find all carousel items
-    carousel_item_pattern = r'<div[^>]*class="cmp-carousel__item"[^>]*>(.*?)</div>'
+    # Try multiple extraction strategies
     
-    for item_match in re.finditer(carousel_item_pattern, html, re.IGNORECASE | re.DOTALL):
-        item_html = item_match.group(0)
+    # Strategy 1: LG.com carousel items (original)
+    carousel_item_pattern = r'<div[^>]*class="[^"]*cmp-carousel__item[^"]*"[^>]*>(.*?)</div>'
+    carousel_matches = list(re.finditer(carousel_item_pattern, html, re.IGNORECASE | re.DOTALL))
+    
+    # Strategy 2: Generic carousel items with data-title
+    if not carousel_matches:
+        carousel_item_pattern = r'<div[^>]*data-title=["\']([^"\']*)["\'][^>]*>(.*?)</div>'
+        carousel_matches = list(re.finditer(carousel_item_pattern, html, re.IGNORECASE | re.DOTALL))
+    
+    # Strategy 3: Any picture tags with media queries
+    if not carousel_matches:
+        picture_pattern = r'<picture[^>]*>(.*?)</picture>'
+        picture_matches = list(re.finditer(picture_pattern, html, re.IGNORECASE | re.DOTALL))
+        if picture_matches:
+            for idx, picture_match in enumerate(picture_matches):
+                picture_html = picture_match.group(0)
+                source_pattern = r'<source[^>]*media="([^"]*)"[^>]*srcset="([^"]*)"[^>]*>'
+                source_matches = list(re.finditer(source_pattern, picture_html, re.IGNORECASE))
+                
+                if source_matches:
+                    image_desktop = ""
+                    image_mobile = ""
+                    
+                    for source_match in source_matches:
+                        media = source_match.group(1)
+                        srcset = source_match.group(2)
+                        
+                        if "min-width" in media or "desktop" in media.lower():
+                            image_desktop = resolve_url(srcset, base_url)
+                        elif "max-width" in media or "mobile" in media.lower():
+                            image_mobile = resolve_url(srcset, base_url)
+                    
+                    # If we found at least one image, add it as a banner
+                    if image_desktop or image_mobile:
+                        banners.append(BannerData(
+                            dataTitle=f"Banner {idx + 1}",
+                            bannerHtml=picture_html,
+                            imageDesktop=image_desktop,
+                            imageMobile=image_mobile
+                        ))
+            
+            if banners:
+                return banners
+    
+    # Process carousel matches using original logic
+    for item_match in carousel_matches:
+        if len(item_match.groups()) >= 1:
+            # Check if this is the data-title pattern
+            if "data-title=" in carousel_item_pattern:
+                data_title = item_match.group(1)
+                item_html = item_match.group(2)
+                # Reconstruct full HTML
+                full_match = item_match.group(0)
+            else:
+                item_html = item_match.group(1)
+                full_match = item_match.group(0)
+                
+                # Extract data-title attribute if present
+                title_match = re.search(r'data-title=["\']([^"\']*)["\']', full_match, re.IGNORECASE)
+                data_title = title_match.group(1) if title_match else ""
+        else:
+            continue
         
-        # Extract data-title attribute
-        title_match = re.search(r'data-title=["\']([^"\']*)["\']', item_html, re.IGNORECASE)
-        data_title = title_match.group(1) if title_match else ""
-        
-        # Check for cmp-container (banner content wrapper)
-        if "cmp-container" not in item_html:
+        # Check for cmp-container or picture tags (banner content wrapper)
+        if "cmp-container" not in full_match and "picture" not in full_match.lower():
             continue
         
         # Initialize image URLs
@@ -235,7 +285,7 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
         # Extract picture element and its source tags
         picture_match = re.search(
             r'<picture[^>]*>(.*?)</picture>',
-            item_html,
+            full_match,
             re.IGNORECASE | re.DOTALL
         )
         
@@ -244,22 +294,27 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
             
             # Find all source tags with media queries
             source_pattern = r'<source[^>]*media="([^"]*)"[^>]*srcset="([^"]*)"[^>]*>'
+            source_matches = list(re.finditer(source_pattern, picture_html, re.IGNORECASE))
             
-            for source_match in re.finditer(source_pattern, picture_html, re.IGNORECASE):
+            for source_match in source_matches:
                 media = source_match.group(1)
                 srcset = source_match.group(2)
                 
-                if "min-width: 769px" in media:
-                    image_desktop = resolve_url(srcset, base_url)
-                elif "max-width: 768px" in media:
-                    image_mobile = resolve_url(srcset, base_url)
+                if "min-width: 769px" in media or "min-width" in media:
+                    if not image_desktop:  # Only set if not already set
+                        image_desktop = resolve_url(srcset, base_url)
+                elif "max-width: 768px" in media or "max-width" in media:
+                    if not image_mobile:  # Only set if not already set
+                        image_mobile = resolve_url(srcset, base_url)
         
-        banners.append(BannerData(
-            dataTitle=data_title,
-            bannerHtml=item_html,
-            imageDesktop=image_desktop,
-            imageMobile=image_mobile
-        ))
+        # Only add if we found at least one image or have an explicit title
+        if (image_desktop or image_mobile) or data_title:
+            banners.append(BannerData(
+                dataTitle=data_title or f"Banner {len(banners) + 1}",
+                bannerHtml=full_match,
+                imageDesktop=image_desktop,
+                imageMobile=image_mobile
+            ))
     
     return banners
 
@@ -274,10 +329,7 @@ async def crawl_url(url: str) -> CrawlResult:
     3. Extracts banner HTML, desktop images, and mobile images
     4. Collects all CSS (external stylesheets and inline styles)
     
-    The LG.com site structure uses:
-    - Carousel items with responsive image sources
-    - Separate desktop/mobile breakpoints (769px threshold)
-    - External CSS files and inline styles
+    Supports multiple HTML structures for flexibility across different sites.
     
     Args:
         url: The website URL to crawl
@@ -305,9 +357,23 @@ async def crawl_url(url: str) -> CrawlResult:
     
     print(f"✓ Fetched HTML ({len(html)} bytes)")
     
+    # Debug: Count potential picture tags
+    picture_count = len(re.findall(r'<picture[^>]*>', html, re.IGNORECASE))
+    print(f"  - Found {picture_count} picture tags in HTML")
+    
+    # Debug: Count carousel items
+    carousel_count = len(re.findall(r'<div[^>]*class="[^"]*cmp-carousel__item[^"]*"', html, re.IGNORECASE))
+    print(f"  - Found {carousel_count} carousel items in HTML")
+    
     # Extract banners from DOM structure
     banners = extract_banner_html_and_images(html, url)
     print(f"✓ Found {len(banners)} banners")
+    
+    if banners:
+        for i, banner in enumerate(banners, 1):
+            has_desktop = "Yes" if banner['imageDesktop'] else "No"
+            has_mobile = "Yes" if banner['imageMobile'] else "No"
+            print(f"  - Banner {i}: {banner['dataTitle']} (Desktop: {has_desktop}, Mobile: {has_mobile})")
     
     # Extract CSS URLs
     css_urls = extract_css_urls(html, url)
