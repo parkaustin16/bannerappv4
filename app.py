@@ -23,9 +23,6 @@ from utils import (
     create_zone_preview_image, resize_image_for_display
 )
 
-# Import capturev2 for web banner capture
-from capturev2 import crawl_url
-
 # Page configuration
 st.set_page_config(
     layout="wide",
@@ -101,6 +98,18 @@ def suppress_png_warnings():
     """Suppress libpng warnings about incorrect sRGB profiles."""
     warnings.filterwarnings("ignore", message=".*iCCP.*")
     warnings.filterwarnings("ignore", message=".*known incorrect sRGB profile.*")
+
+
+def load_capturev2_module():
+    """Lazy load capturev2 module to avoid import errors on startup."""
+    try:
+        import capturev2
+        return capturev2.crawl_url
+    except ImportError as e:
+        st.error(f"Failed to load capturev2 module: {e}")
+        st.info("Please ensure capturev2.py is in the same directory as app.py")
+        return None
+
 
 # --- Cached OCR Reader ---
 @st.cache_resource
@@ -1543,6 +1552,12 @@ def render_process_mode():
                 else:
                     try:
                         with st.spinner(f"Capturing banners from {url_input}..."):
+                            # Lazy load capturev2 module
+                            crawl_url = load_capturev2_module()
+                            if not crawl_url:
+                                st.error("Cannot proceed without capturev2 module")
+                                return
+                            
                             # Run the async capture function
                             result = asyncio.run(crawl_url(url_input))
                             st.session_state.captured_banners = result
