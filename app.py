@@ -103,11 +103,15 @@ def suppress_png_warnings():
 def load_capturev2_module():
     """Lazy load capturev2 module to avoid import errors on startup."""
     try:
-        import capturev2
-        return capturev2.crawl_url
+        from capturev2 import crawl_url
+        return crawl_url
     except ImportError as e:
         st.error(f"Failed to load capturev2 module: {e}")
         st.info("Please ensure capturev2.py is in the same directory as app.py")
+        return None
+    except AttributeError as e:
+        st.error(f"Failed to import crawl_url from capturev2: {e}")
+        st.info("Please ensure capturev2.py contains the crawl_url function")
         return None
 
 
