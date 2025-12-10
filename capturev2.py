@@ -16,11 +16,12 @@ __all__ = ['crawl_url', 'BannerData', 'CrawlResult']
 
 
 class BannerData(TypedDict):
-    """Represents a single captured banner with its metadata and images."""
+    """Represents a single captured banner with its metadata, images, and extracted text."""
     dataTitle: str
     bannerHtml: str
     imageDesktop: str
     imageMobile: str
+    extractedText: dict  # From textinspect: eyebrow, head_copy, body_copy
 
 
 class CrawlResult(TypedDict):
@@ -46,6 +47,56 @@ class HTMLPictureParser(HTMLParser):
     def handle_endtag(self, tag: str):
         if tag == "picture":
             self.in_picture = False
+
+
+def extract_text_from_banner(html: str) -> dict:
+    """
+    Extract text from banner HTML using regex patterns.
+    Mimics textinspect.extract_text_from_html but works standalone.
+    
+    Args:
+        html: Banner HTML code
+    
+    Returns:
+        Dictionary with eyebrow, head_copy, body_copy
+    """
+    eyebrow = ""
+    head_copy = ""
+    body_copy = ""
+    
+    # Extract eyebrow text (class containing 'eyebrow')
+    eyebrow_pattern = r'<[^>]*class="[^"]*eyebrow[^"]*"[^>]*>([^<]*)</[^>]*>'
+    eyebrow_match = re.search(eyebrow_pattern, html, re.IGNORECASE)
+    if eyebrow_match:
+        eyebrow = eyebrow_match.group(1).strip()
+    
+    # Extract head copy (h1, h2, or class containing 'head')
+    head_patterns = [
+        r'<h[1-2][^>]*>([^<]*)</h[1-2]>',
+        r'<[^>]*class="[^"]*head[^"]*"[^>]*>([^<]*)</[^>]*>'
+    ]
+    for pattern in head_patterns:
+        head_match = re.search(pattern, html, re.IGNORECASE)
+        if head_match:
+            head_copy = head_match.group(1).strip()
+            break
+    
+    # Extract body copy (p, div, or class containing 'body')
+    body_patterns = [
+        r'<p[^>]*>([^<]*)</p>',
+        r'<[^>]*class="[^"]*body[^"]*"[^>]*>([^<]*)</[^>]*>'
+    ]
+    for pattern in body_patterns:
+        body_match = re.search(pattern, html, re.IGNORECASE)
+        if body_match:
+            body_copy = body_match.group(1).strip()
+            break
+    
+    return {
+        "eyebrow": eyebrow,
+        "head_copy": head_copy,
+        "body_copy": body_copy
+    }
 
 
 def resolve_url(url: str, base_url: str) -> str:
@@ -309,11 +360,15 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
         
         # Only add if we found at least one image or have an explicit title
         if (image_desktop or image_mobile) or data_title:
+            # Extract text from banner HTML
+            extracted_text = extract_text_from_banner(full_match)
+            
             banners.append(BannerData(
                 dataTitle=data_title or f"Banner {len(banners) + 1}",
                 bannerHtml=full_match,
                 imageDesktop=image_desktop,
-                imageMobile=image_mobile
+                imageMobile=image_mobile,
+                extractedText=extracted_text
             ))
     
     return banners

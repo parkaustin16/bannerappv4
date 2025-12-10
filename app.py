@@ -1408,27 +1408,121 @@ def render_sidebar():
 
 
 def render_process_mode():
-    """Render the unified image processing mode (single or multiple images)."""
-    st.header("📄 Image Processing")
-
-    # Mode selector: Upload or URL Capture
-    mode_col1, mode_col2 = st.columns(2)
-    with mode_col1:
-        if st.button("📁 Upload Images", use_container_width=True, 
-                     key="mode_upload_btn"):
-            st.session_state.capture_mode = "upload"
-            st.rerun()
+    """Render the web banner capture mode."""
+    st.header("🌐 Banner Capture from Web")
+    st.markdown("Capture and analyze banners from LG subsidiary websites")
     
-    with mode_col2:
-        if st.button("🌐 Capture from URL", use_container_width=True,
-                     key="mode_url_btn"):
-            st.session_state.capture_mode = "url"
+    st.markdown("---")
+
+    # URL Capture Only
+    st.subheader("Enter Website URL")
+    
+    url_input = st.text_input(
+        "Website URL",
+        value=st.session_state.get("capture_url", ""),
+        placeholder="https://example.com",
+        help="Enter the URL of the LG subsidiary site to capture banners from",
+        label_visibility="collapsed"
+    )
+    
+    if url_input:
+        st.session_state.capture_url = url_input
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🚀 Capture Banners", use_container_width=True):
+            if not url_input:
+                st.error("Please enter a URL")
+            else:
+                try:
+                    with st.spinner(f"Capturing banners from {url_input}..."):
+                        # Lazy load capturev2 module
+                        crawl_url = load_capturev2_module()
+                        if not crawl_url:
+                            st.error("Cannot proceed without capturev2 module")
+                            return
+                        
+                        # Run the async capture function
+                        result = asyncio.run(crawl_url(url_input))
+                        st.session_state.captured_banners = result
+                        
+                        if result["banners"]:
+                            st.success(f"✅ Successfully captured {len(result['banners'])} banner(s)!")
+                            
+                            # Convert captured banners to processable images
+                            st.session_state.batch_results = []
+                            ocr_reader = load_reader()
+                            st.session_state["_cached_reader"] = ocr_reader
+                            cached_batch = []
+                            
+                            for idx, banner in enumerate(result["banners"]):
+                                try:
+                                    # Banner name from capture
+                                    banner_name = banner.get("dataTitle", f"Banner {idx + 1}")
+                                    if not banner_name:
+                                        banner_name = f"Banner {idx + 1}"
+                                    
+                                    # Try to fetch and process the desktop image
+                                    if banner.get("imageDesktop"):
+                                        import aiohttp
+                                        
+                                        async def fetch_image(url):
+                                            async with aiohttp.ClientSession() as session:
+                                                async with session.get(url) as resp:
+                                                    if resp.status == 200:
+                                                        return await resp.read()
+                                            return None
+                                        
+                                        img_bytes = asyncio.run(fetch_image(banner["imageDesktop"]))
+                                        if img_bytes:
+                                            img = Image.open(io.BytesIO(img_bytes))
+                                            img = clean_png_image(img)
+                                            
+                                            # Cache image bytes
+                                            raw_buf = io.BytesIO()
+                                            img.save(raw_buf, format="PNG", optimize=True)
+                                            raw_bytes = raw_buf.getvalue()
+                                            raw_buf.close()
+                                            
+                                            st.session_state["_cached_img_bytes"] = raw_bytes
+                                            st.session_state["_cached_img_name"] = banner_name
+                                            
+                                            _ensure_per_image_zone_containers(banner_name)
+                                            cached_batch.append({"bytes": raw_bytes, "name": banner_name})
+                                            
+                                            # Process the image with OCR
+                                            result = process_image(img, ocr_reader, st.session_state.overlap_threshold, banner_name)
+                                            
+                                            # Add extracted text from HTML to result
+                                            result["extracted_text"] = banner.get("extractedText", {})
+                                            
+                                            st.session_state.batch_results.append(result)
+                                            img.close()
+                                        else:
+                                            st.warning(f"Could not fetch image for {banner_name}")
+                                except Exception as e:
+                                    st.error(f"Error processing banner {idx + 1}: {e}")
+                            
+                            if st.session_state.batch_results:
+                                st.session_state["_cached_batch"] = cached_batch
+                                st.rerun()
+                        else:
+                            st.warning("No banners found on the website")
+                            
+                except Exception as e:
+                    st.error(f"Error capturing banners: {e}")
+                    st.info("Make sure the URL is valid and accessible")
+    
+    with col2:
+        if st.button("🔄 Clear Results", use_container_width=True):
+            st.session_state.captured_banners = None
+            st.session_state.batch_results = []
+            st.session_state.capture_url = ""
             st.rerun()
 
     st.markdown("---")
-
-    # Upload Mode
-    if st.session_state.capture_mode == "upload":
+    
+    if False:  # Disabled upload mode - keeping for reference
         # Combined upload area with file uploader functionality
         uploaded_files = st.file_uploader(
             "Upload Your Images",
@@ -1533,9 +1627,6 @@ def render_process_mode():
                     st.warning(f"File/IO error during drawing update: {e}")
                 except Exception as e:
                     st.warning(f"Unexpected error during drawing update: {e}")
-
-    # URL Capture Mode
-    elif st.session_state.capture_mode == "url":
         st.subheader("🌐 Capture Banners from URL")
         
         url_input = st.text_input(
@@ -1659,6 +1750,24 @@ def render_process_mode():
                 _ensure_per_image_zone_containers(result["filename"]) 
                 if "_pending_edit_image" not in st.session_state:
                     st.session_state["_pending_edit_image"] = result["filename"]
+
+            # Display extracted text from HTML
+            if result.get("extracted_text"):
+                st.subheader("📝 Extracted Text from HTML")
+                extracted = result["extracted_text"]
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if extracted.get("eyebrow"):
+                        st.write("**Eyebrow:**")
+                        st.info(extracted["eyebrow"])
+                with col2:
+                    if extracted.get("head_copy"):
+                        st.write("**Head Copy:**")
+                        st.info(extracted["head_copy"])
+                with col3:
+                    if extracted.get("body_copy"):
+                        st.write("**Body Copy:**")
+                        st.info(extracted["body_copy"])
 
             # Display penalties
             if result["penalties"]:
