@@ -20,6 +20,30 @@ except ImportError:
 # Export main function
 __all__ = ['crawl_url', 'BannerData', 'CrawlResult']
 
+# Target aspect ratio for banners (8:3 = 2.667)
+TARGET_ASPECT_RATIO = 8 / 3
+ASPECT_RATIO_TOLERANCE = 0.1  # Allow 10% tolerance
+
+def is_valid_aspect_ratio(width: int, height: int) -> bool:
+    """
+    Check if banner dimensions match the target aspect ratio (8:3).
+    
+    Args:
+        width: Banner width in pixels
+        height: Banner height in pixels
+    
+    Returns:
+        True if aspect ratio is within tolerance of 8:3
+    """
+    if width <= 0 or height <= 0:
+        return False
+    
+    aspect_ratio = width / height
+    min_ratio = TARGET_ASPECT_RATIO * (1 - ASPECT_RATIO_TOLERANCE)
+    max_ratio = TARGET_ASPECT_RATIO * (1 + ASPECT_RATIO_TOLERANCE)
+    
+    return min_ratio <= aspect_ratio <= max_ratio
+
 
 class BannerData(TypedDict):
     """Represents a single captured banner with dimensions and screenshot."""
@@ -110,8 +134,9 @@ def extract_text_from_banner(html: str) -> dict:
 
 async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item") -> tuple:
     """
-    Capture a screenshot of a banner element with its actual dimensions.
+    Capture a screenshot of a banner element with aspect ratio validation.
     
+    Only captures desktop banners with aspect ratio of 8:3 (±10%).
     Uses Playwright to render the page and capture the banner area including all text.
     
     Args:
@@ -119,11 +144,11 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
         banner_selector: CSS selector for the banner element
     
     Returns:
-        Tuple of (width, height, screenshot_bytes) or (0, 0, None) if capture fails
+        Tuple of (width, height, screenshot_bytes, valid) or (0, 0, None, False) if capture fails
     """
     if not HAS_PLAYWRIGHT:
         print("⚠ Playwright not installed. Skipping screenshot capture.")
-        return (0, 0, None)
+        return (0, 0, None, False)
     
     try:
         async with async_playwright() as p:
@@ -150,19 +175,28 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                 if not banner_element:
                     print("⚠ No banner element found")
                     await browser.close()
-                    return (0, 0, None)
+                    return (0, 0, None, False)
                 
                 # Get banner bounding box
                 bbox = await banner_element.bounding_box()
                 if not bbox:
                     print("⚠ Could not get banner bounding box")
                     await browser.close()
-                    return (0, 0, None)
+                    return (0, 0, None, False)
                 
                 width = int(bbox['width'])
                 height = int(bbox['height'])
                 
-                print(f"✓ Banner dimensions: {width}x{height}px")
+                # Validate aspect ratio (8:3 desktop banner)
+                valid_aspect = is_valid_aspect_ratio(width, height)
+                aspect_ratio = width / height if height > 0 else 0
+                
+                if not valid_aspect:
+                    print(f"✗ Invalid aspect ratio: {aspect_ratio:.2f} (target: {TARGET_ASPECT_RATIO:.2f} ±{ASPECT_RATIO_TOLERANCE*100:.0f}%)")
+                    await browser.close()
+                    return (width, height, None, False)
+                
+                print(f"✓ Banner dimensions: {width}x{height}px (aspect ratio: {aspect_ratio:.2f})")
                 
                 # Set viewport to match banner dimensions (with some padding)
                 await page.set_viewport_size({"width": width + 20, "height": height + 20})
@@ -174,16 +208,16 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                 print(f"✓ Captured banner screenshot ({len(screenshot)} bytes)")
                 
                 await browser.close()
-                return (width, height, screenshot)
+                return (width, height, screenshot, True)
                 
             except Exception as e:
                 print(f"✗ Error capturing screenshot: {e}")
                 await browser.close()
-                return (0, 0, None)
+                return (0, 0, None, False)
                 
     except Exception as e:
-        print(f"✗ Error initializing browser: {e}")
-        return (0, 0, None)
+        print(f"✗ Error launching browser: {e}")
+        return (0, 0, None, False)
 
 
 def resolve_url(url: str, base_url: str) -> str:
@@ -526,11 +560,18 @@ async def crawl_url(url: str) -> CrawlResult:
         
         # Capture screenshots of banners with their actual dimensions
         print(f"\n📸 Capturing banner screenshots...")
+        valid_banners = []
+        
         for i, banner in enumerate(banners):
             try:
-                width, height, screenshot = await capture_banner_screenshot(url, ".cmp-carousel__item")
+                width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item")
+                
+                if not valid:
+                    print(f"  ⊘ Skipped {banner['dataTitle']}: invalid aspect ratio or dimensions")
+                    continue
+                
                 if screenshot:
-                    banners[i] = BannerData(
+                    updated_banner = BannerData(
                         dataTitle=banner['dataTitle'],
                         bannerHtml=banner['bannerHtml'],
                         imageDesktop=banner['imageDesktop'],
@@ -540,9 +581,14 @@ async def crawl_url(url: str) -> CrawlResult:
                         height=height,
                         screenshotBytes=screenshot
                     )
+                    valid_banners.append(updated_banner)
                     print(f"  ✓ Captured {banner['dataTitle']} ({width}x{height}px)")
             except Exception as e:
                 print(f"  ✗ Failed to capture {banner['dataTitle']}: {e}")
+        
+        # Replace banners list with only valid ones
+        banners = valid_banners
+        print(f"\n✓ {len(banners)} banners passed aspect ratio validation")
     
     # Extract CSS URLs
     css_urls = extract_css_urls(html, url)
