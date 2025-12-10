@@ -11,17 +11,26 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from html.parser import HTMLParser
 
+try:
+    from playwright.async_api import async_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
+
 # Export main function
 __all__ = ['crawl_url', 'BannerData', 'CrawlResult']
 
 
 class BannerData(TypedDict):
-    """Represents a single captured banner with its metadata, images, and extracted text."""
+    """Represents a single captured banner with dimensions and screenshot."""
     dataTitle: str
     bannerHtml: str
     imageDesktop: str
     imageMobile: str
-    extractedText: dict  # From textinspect: eyebrow, head_copy, body_copy
+    extractedText: dict
+    width: int  # Banner width in pixels
+    height: int  # Banner height in pixels
+    screenshotBytes: Optional[bytes]  # Screenshot of banner area
 
 
 class CrawlResult(TypedDict):
@@ -97,6 +106,84 @@ def extract_text_from_banner(html: str) -> dict:
         "head_copy": head_copy,
         "body_copy": body_copy
     }
+
+
+async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item") -> tuple:
+    """
+    Capture a screenshot of a banner element with its actual dimensions.
+    
+    Uses Playwright to render the page and capture the banner area including all text.
+    
+    Args:
+        url: The website URL
+        banner_selector: CSS selector for the banner element
+    
+    Returns:
+        Tuple of (width, height, screenshot_bytes) or (0, 0, None) if capture fails
+    """
+    if not HAS_PLAYWRIGHT:
+        print("⚠ Playwright not installed. Skipping screenshot capture.")
+        return (0, 0, None)
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            
+            # Set user agent
+            await page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            
+            try:
+                # Navigate to URL with timeout
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                
+                # Wait for banner to be visible
+                try:
+                    await page.wait_for_selector(banner_selector, timeout=5000)
+                except:
+                    print(f"⚠ Banner selector '{banner_selector}' not found, using first carousel item")
+                
+                # Get banner element
+                banner_element = await page.query_selector(banner_selector)
+                if not banner_element:
+                    print("⚠ No banner element found")
+                    await browser.close()
+                    return (0, 0, None)
+                
+                # Get banner bounding box
+                bbox = await banner_element.bounding_box()
+                if not bbox:
+                    print("⚠ Could not get banner bounding box")
+                    await browser.close()
+                    return (0, 0, None)
+                
+                width = int(bbox['width'])
+                height = int(bbox['height'])
+                
+                print(f"✓ Banner dimensions: {width}x{height}px")
+                
+                # Set viewport to match banner dimensions (with some padding)
+                await page.set_viewport_size({"width": width + 20, "height": height + 20})
+                
+                # Scroll element into view and take screenshot
+                await banner_element.scroll_into_view_if_needed()
+                screenshot = await banner_element.screenshot()
+                
+                print(f"✓ Captured banner screenshot ({len(screenshot)} bytes)")
+                
+                await browser.close()
+                return (width, height, screenshot)
+                
+            except Exception as e:
+                print(f"✗ Error capturing screenshot: {e}")
+                await browser.close()
+                return (0, 0, None)
+                
+    except Exception as e:
+        print(f"✗ Error initializing browser: {e}")
+        return (0, 0, None)
 
 
 def resolve_url(url: str, base_url: str) -> str:
@@ -300,7 +387,11 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
                             dataTitle=f"Banner {idx + 1}",
                             bannerHtml=picture_html,
                             imageDesktop=image_desktop,
-                            imageMobile=image_mobile
+                            imageMobile=image_mobile,
+                            extractedText={},
+                            width=0,
+                            height=0,
+                            screenshotBytes=None
                         ))
             
             if banners:
@@ -368,7 +459,10 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
                 bannerHtml=full_match,
                 imageDesktop=image_desktop,
                 imageMobile=image_mobile,
-                extractedText=extracted_text
+                extractedText=extracted_text,
+                width=0,
+                height=0,
+                screenshotBytes=None
             ))
     
     return banners
@@ -429,6 +523,26 @@ async def crawl_url(url: str) -> CrawlResult:
             has_desktop = "Yes" if banner['imageDesktop'] else "No"
             has_mobile = "Yes" if banner['imageMobile'] else "No"
             print(f"  - Banner {i}: {banner['dataTitle']} (Desktop: {has_desktop}, Mobile: {has_mobile})")
+        
+        # Capture screenshots of banners with their actual dimensions
+        print(f"\n📸 Capturing banner screenshots...")
+        for i, banner in enumerate(banners):
+            try:
+                width, height, screenshot = await capture_banner_screenshot(url, ".cmp-carousel__item")
+                if screenshot:
+                    banners[i] = BannerData(
+                        dataTitle=banner['dataTitle'],
+                        bannerHtml=banner['bannerHtml'],
+                        imageDesktop=banner['imageDesktop'],
+                        imageMobile=banner['imageMobile'],
+                        extractedText=banner['extractedText'],
+                        width=width,
+                        height=height,
+                        screenshotBytes=screenshot
+                    )
+                    print(f"  ✓ Captured {banner['dataTitle']} ({width}x{height}px)")
+            except Exception as e:
+                print(f"  ✗ Failed to capture {banner['dataTitle']}: {e}")
     
     # Extract CSS URLs
     css_urls = extract_css_urls(html, url)

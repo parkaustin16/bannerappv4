@@ -1493,8 +1493,11 @@ def render_process_mode():
                                             # Process the image with OCR
                                             result = process_image(img, ocr_reader, st.session_state.overlap_threshold, banner_name)
                                             
-                                            # Add extracted text from HTML to result
-                                            result["extracted_text"] = banner.get("extractedText", {})
+                                            # Add banner screenshot and dimensions to result
+                                            if banner.get("screenshotBytes"):
+                                                result["banner_screenshot"] = banner["screenshotBytes"]
+                                                result["banner_width"] = banner.get("width", 0)
+                                                result["banner_height"] = banner.get("height", 0)
                                             
                                             st.session_state.batch_results.append(result)
                                             img.close()
@@ -1751,23 +1754,13 @@ def render_process_mode():
                 if "_pending_edit_image" not in st.session_state:
                     st.session_state["_pending_edit_image"] = result["filename"]
 
-            # Display extracted text from HTML
-            if result.get("extracted_text"):
-                st.subheader("📝 Extracted Text from HTML")
-                extracted = result["extracted_text"]
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if extracted.get("eyebrow"):
-                        st.write("**Eyebrow:**")
-                        st.info(extracted["eyebrow"])
-                with col2:
-                    if extracted.get("head_copy"):
-                        st.write("**Head Copy:**")
-                        st.info(extracted["head_copy"])
-                with col3:
-                    if extracted.get("body_copy"):
-                        st.write("**Body Copy:**")
-                        st.info(extracted["body_copy"])
+            # Display banner screenshot with dimensions
+            if result.get("banner_screenshot"):
+                st.subheader("🖼️ Banner Screenshot")
+                st.info(f"Dimensions: {result.get('banner_width', 'N/A')} x {result.get('banner_height', 'N/A')} pixels")
+                st.image(result["banner_screenshot"], use_container_width=True, 
+                        caption=f"Captured banner with all content ({result.get('banner_width', 'N/A')}x{result.get('banner_height', 'N/A')})")
+
 
             # Display penalties
             if result["penalties"]:
