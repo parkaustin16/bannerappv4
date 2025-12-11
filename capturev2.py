@@ -167,7 +167,11 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
             })
 
             try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                # Try a faster navigation strategy first (DOMContentLoaded), then fallback to networkidle
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                except Exception:
+                    await page.goto(url, wait_until="networkidle", timeout=60000)
 
                 # Try to find element by image URL if provided
                 banner_element = None
@@ -264,7 +268,7 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                     await browser.close()
                     return (0, 0, None, False)
 
-                # Get bounding box and capture screenshot of element area
+                # Get bounding box for the matched element
                 bbox = await banner_element.bounding_box()
                 if not bbox:
                     print("⚠ Could not get banner bounding box")
@@ -274,9 +278,70 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                 width = int(bbox['width'])
                 height = int(bbox['height'])
 
+                # If matched element has poor aspect ratio or tiny dimensions, search ancestor chain
+                aspect_ratio = width / height if height > 0 else 999
+                aspect_diff = abs(aspect_ratio - TARGET_ASPECT_RATIO)
+                
+                if height < 100 or width < 600 or aspect_diff > 1.5:
+                    print(f"ℹ️ Element too small/wrong aspect ({width}x{height}, aspect {aspect_ratio:.2f}); checking ancestors...")
+                    try:
+                        # Use page.evaluate to walk ancestor chain and collect bounding boxes
+                        ancestor_data = await page.evaluate("""
+                            (elem) => {
+                                const results = [];
+                                let current = elem;
+                                for (let i = 0; i < 20 && current && current.parentElement; i++) {
+                                    current = current.parentElement;
+                                    const rect = current.getBoundingClientRect();
+                                    if (rect.width > 0 && rect.height > 0 && rect.height < 2500 && rect.width < 2500) {
+                                        results.push({
+                                            w: Math.round(rect.width),
+                                            h: Math.round(rect.height),
+                                            aspect: rect.width / rect.height
+                                        });
+                                    }
+                                }
+                                return results;
+                            }
+                        """, banner_element)
+                        
+                        if ancestor_data:
+                            # Find ancestor with aspect ratio closest to target
+                            best = None
+                            best_diff = 999
+                            for a in ancestor_data:
+                                a_diff = abs(a['aspect'] - TARGET_ASPECT_RATIO)
+                                if a['h'] >= 300 and a['w'] >= 800 and a_diff < best_diff:
+                                    best = a
+                                    best_diff = a_diff
+                            
+                            if best and best_diff < aspect_diff:
+                                print(f"ℹ️ Found better ancestor: {best['w']}x{best['h']} (aspect {best['aspect']:.2f}, diff {best_diff:.2f})")
+                                # Try to find and use this ancestor element
+                                try:
+                                    # Use queryAllBy dimension matching as a heuristic to find the ancestor
+                                    candidates = await page.query_selector_all(f"div, section, header, main")
+                                    for cand in candidates:
+                                        try:
+                                            cbbox = await cand.bounding_box()
+                                            if (cbbox and int(cbbox['width']) == best['w'] and int(cbbox['height']) == best['h']):
+                                                banner_element = cand
+                                                width = best['w']
+                                                height = best['h']
+                                                print(f"ℹ️ Switched to ancestor element")
+                                                break
+                                        except:
+                                            continue
+                                except:
+                                    pass
+                    except Exception as e:
+                        print(f"ℹ️ Ancestor search failed (continuing): {e}")
+
                 # Ensure the element is in view and take element screenshot
                 await banner_element.scroll_into_view_if_needed()
                 screenshot = await banner_element.screenshot()
+
+
 
                 # Validate aspect ratio after capture
                 valid_aspect = is_valid_aspect_ratio(width, height)
