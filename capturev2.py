@@ -7,7 +7,8 @@ to capture web and mobile banners from LG subsidiary sites.
 import re
 import asyncio
 from typing import TypedDict, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, unquote
+import os
 import aiohttp
 from html.parser import HTMLParser
 
@@ -172,29 +173,79 @@ async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carou
                 banner_element = None
                 if image_url:
                     try:
-                        # First try to match <img> elements
+                        # normalize image target (strip query/fragments, take basename)
+                        parsed = urlparse(image_url)
+                        target_basename = unquote(os.path.basename(parsed.path)) if parsed.path else image_url
+
+                        # Helper to normalize candidate urls/strings
+                        def _matches_target(candidate: str) -> bool:
+                            if not candidate:
+                                return False
+                            # strip url params
+                            try:
+                                c_parsed = urlparse(candidate.strip())
+                                c_path = unquote(c_parsed.path)
+                                c_basename = os.path.basename(c_path)
+                            except:
+                                c_basename = os.path.basename(candidate)
+                            if not c_basename:
+                                return False
+                            # exact basename match or substring
+                            return (c_basename == target_basename) or (target_basename in c_basename) or (target_basename in candidate)
+
+                        # First try to match <img> elements and their attributes (src, srcset, data-src...)
                         img_elements = await page.query_selector_all('img')
                         for img in img_elements:
                             try:
-                                src = await img.get_attribute('src') or ''
-                                srcset = await img.get_attribute('srcset') or ''
-                                if image_url in src or image_url in srcset:
-                                    banner_element = img
-                                    break
+                                attrs = []
+                                for a in ['src', 'srcset', 'data-src', 'data-srcset', 'data-lazy', 'data-original']:
+                                    v = await img.get_attribute(a)
+                                    if v:
+                                        attrs.append(v)
+                                # srcset can contain multiple urls separated by commas
+                                for v in attrs:
+                                    parts = [p.strip() for p in v.split(',') if p.strip()]
+                                    for part in parts:
+                                        # each part may be "url 1x" etc., get first token as url
+                                        candidate = part.split()[-1] if ' ' in part else part
+                                        if _matches_target(candidate) or _matches_target(part):
+                                            banner_element = img
+                                            break
+                                    if banner_element:
+                                        break
                             except:
                                 continue
+                            if banner_element:
+                                break
 
-                        # If no <img> matched, try matching <picture> content
+                        # If no <img> matched, try matching <picture> innerHTML
                         if not banner_element:
                             picture_elements = await page.query_selector_all('picture')
                             for pic in picture_elements:
                                 try:
                                     inner = await pic.inner_html()
-                                    if image_url in inner:
+                                    if target_basename in inner or image_url in inner:
                                         banner_element = pic
                                         break
                                 except:
                                     continue
+
+                        # If still not found, check background-image computed styles across elements
+                        if not banner_element:
+                            try:
+                                bg_results = await page.eval_on_selector_all('*', "els => els.map(e => getComputedStyle(e).backgroundImage || '')")
+                                for idx_bg, bg in enumerate(bg_results):
+                                    if not bg:
+                                        continue
+                                    # backgroundImage may be like 'url("https://.../image.jpg")'
+                                    if image_url in bg or target_basename in bg:
+                                        # get element by index
+                                        elems = await page.query_selector_all('*')
+                                        if idx_bg < len(elems):
+                                            banner_element = elems[idx_bg]
+                                            break
+                            except Exception:
+                                pass
                     except Exception:
                         banner_element = None
 
@@ -597,7 +648,8 @@ async def crawl_url(url: str) -> CrawlResult:
                 image_url = banner.get('imageDesktop') or None
                 width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item", banner_index=i, image_url=image_url)
 
-                if screenshot:
+                # Enforce desktop-only + aspect-ratio valid
+                if screenshot and valid and banner.get('imageDesktop'):
                     updated_banner = BannerData(
                         dataTitle=banner['dataTitle'],
                         bannerHtml=banner['bannerHtml'],
@@ -609,10 +661,17 @@ async def crawl_url(url: str) -> CrawlResult:
                         screenshotBytes=screenshot
                     )
                     valid_banners.append(updated_banner)
-                    status = "✓" if valid else "⚠"
-                    print(f"  {status} Captured {banner['dataTitle']} ({width}x{height}px) — valid={valid}")
+                    print(f"  ✓ Captured and accepted {banner['dataTitle']} ({width}x{height}px)")
                 else:
-                    print(f"  ✗ No screenshot for {banner['dataTitle']}")
+                    # Provide a clear reason for skipping
+                    reason = []
+                    if not screenshot:
+                        reason.append("no screenshot")
+                    if not valid:
+                        reason.append("aspect mismatch")
+                    if not banner.get('imageDesktop'):
+                        reason.append("no desktop image")
+                    print(f"  ⊘ Skipped {banner['dataTitle']}: {', '.join(reason)}")
             except Exception as e:
                 print(f"  ✗ Failed to capture {banner['dataTitle']}: {e}")
         
