@@ -132,93 +132,118 @@ def extract_text_from_banner(html: str) -> dict:
     }
 
 
-async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item", banner_index: int = 0) -> tuple:
+async def capture_banner_screenshot(url: str, banner_selector: str = ".cmp-carousel__item", banner_index: int = 0, image_url: Optional[str] = None) -> tuple:
     """
-    Capture a screenshot of a specific banner element with aspect ratio validation.
-    
-    Only captures desktop banners with aspect ratio of 8:3 (±10%).
-    Uses Playwright to render the page and capture the banner area including all text.
-    
+    Capture a screenshot of a banner element. Attempts to locate the element by
+    `image_url` first (matching `src` or `srcset`) and falls back to selector+index.
+
+    The function captures the element's rendered bounding box first, then computes
+    and returns the dimensions. Aspect ratio is validated after capture and
+    returned as the `valid` flag — this ensures the screenshot is always of the
+    actual element area rather than a full-page capture.
+
     Args:
         url: The website URL
-        banner_selector: CSS selector for the banner element
-        banner_index: Index of the banner to capture (0 for first, 1 for second, etc.)
-    
+        banner_selector: CSS selector for banner container elements
+        banner_index: Index to fall back to if image matching fails
+        image_url: Optional resolved desktop image URL to match inside the DOM
+
     Returns:
-        Tuple of (width, height, screenshot_bytes, valid) or (0, 0, None, False) if capture fails
+        Tuple (width, height, screenshot_bytes, valid)
     """
     if not HAS_PLAYWRIGHT:
         print("⚠ Playwright not installed. Skipping screenshot capture.")
         return (0, 0, None, False)
-    
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            
+
             # Set user agent
             await page.set_extra_http_headers({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             })
-            
+
             try:
-                # Navigate to URL with timeout
                 await page.goto(url, wait_until="networkidle", timeout=30000)
-                
-                # Wait for banner selector to be visible
-                try:
-                    await page.wait_for_selector(banner_selector, timeout=5000)
-                except:
-                    print(f"⚠ Banner selector '{banner_selector}' not found")
-                
-                # Get all banner elements matching selector
-                banner_elements = await page.query_selector_all(banner_selector)
-                if not banner_elements or banner_index >= len(banner_elements):
-                    print(f"⚠ Banner index {banner_index} not found (total banners: {len(banner_elements)})")
+
+                # Try to find element by image URL if provided
+                banner_element = None
+                if image_url:
+                    try:
+                        # First try to match <img> elements
+                        img_elements = await page.query_selector_all('img')
+                        for img in img_elements:
+                            try:
+                                src = await img.get_attribute('src') or ''
+                                srcset = await img.get_attribute('srcset') or ''
+                                if image_url in src or image_url in srcset:
+                                    banner_element = img
+                                    break
+                            except:
+                                continue
+
+                        # If no <img> matched, try matching <picture> content
+                        if not banner_element:
+                            picture_elements = await page.query_selector_all('picture')
+                            for pic in picture_elements:
+                                try:
+                                    inner = await pic.inner_html()
+                                    if image_url in inner:
+                                        banner_element = pic
+                                        break
+                                except:
+                                    continue
+                    except Exception:
+                        banner_element = None
+
+                # If we couldn't find by image, fall back to selector+index
+                if not banner_element:
+                    try:
+                        await page.wait_for_selector(banner_selector, timeout=5000)
+                    except:
+                        pass
+                    banner_elements = await page.query_selector_all(banner_selector)
+                    if banner_elements and banner_index < len(banner_elements):
+                        banner_element = banner_elements[banner_index]
+
+                if not banner_element:
+                    print("⚠ No matching banner element found on page")
                     await browser.close()
                     return (0, 0, None, False)
-                
-                # Get the specific banner element at the given index
-                banner_element = banner_elements[banner_index]
-                
-                # Get banner bounding box
+
+                # Get bounding box and capture screenshot of element area
                 bbox = await banner_element.bounding_box()
                 if not bbox:
                     print("⚠ Could not get banner bounding box")
                     await browser.close()
                     return (0, 0, None, False)
-                
+
                 width = int(bbox['width'])
                 height = int(bbox['height'])
-                
-                # Validate aspect ratio (8:3 desktop banner)
-                valid_aspect = is_valid_aspect_ratio(width, height)
-                aspect_ratio = width / height if height > 0 else 0
-                
-                if not valid_aspect:
-                    print(f"✗ Invalid aspect ratio: {aspect_ratio:.2f} (target: {TARGET_ASPECT_RATIO:.2f} ±{ASPECT_RATIO_TOLERANCE*100:.0f}%)")
-                    await browser.close()
-                    return (width, height, None, False)
-                
-                print(f"✓ Banner dimensions: {width}x{height}px (aspect ratio: {aspect_ratio:.2f})")
-                
-                # Set viewport to match banner dimensions (with some padding)
-                await page.set_viewport_size({"width": width + 20, "height": height + 20})
-                
-                # Scroll element into view and take screenshot
+
+                # Ensure the element is in view and take element screenshot
                 await banner_element.scroll_into_view_if_needed()
                 screenshot = await banner_element.screenshot()
-                
-                print(f"✓ Captured banner screenshot ({len(screenshot)} bytes)")
-                
+
+                # Validate aspect ratio after capture
+                valid_aspect = is_valid_aspect_ratio(width, height)
+                aspect_ratio = width / height if height > 0 else 0
+
+                if not valid_aspect:
+                    print(f"⚠ Captured {width}x{height}px (aspect {aspect_ratio:.2f}) — outside target {TARGET_ASPECT_RATIO:.2f}")
+                else:
+                    print(f"✓ Banner dimensions: {width}x{height}px (aspect ratio: {aspect_ratio:.2f})")
+
                 await browser.close()
-                return (width, height, screenshot, True)
-                
+                return (width, height, screenshot, valid_aspect)
+
             except Exception as e:
                 print(f"✗ Error capturing screenshot: {e}")
                 await browser.close()
                 return (0, 0, None, False)
-                
+
     except Exception as e:
         print(f"✗ Error launching browser: {e}")
         return (0, 0, None, False)
@@ -568,13 +593,10 @@ async def crawl_url(url: str) -> CrawlResult:
         
         for i, banner in enumerate(banners):
             try:
-                # Pass the banner index to capture the correct banner on the page
-                width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item", banner_index=i)
-                
-                if not valid:
-                    print(f"  ⊘ Skipped {banner['dataTitle']}: invalid aspect ratio or dimensions")
-                    continue
-                
+                # Prefer locating element by extracted desktop image URL; fall back to index
+                image_url = banner.get('imageDesktop') or None
+                width, height, screenshot, valid = await capture_banner_screenshot(url, ".cmp-carousel__item", banner_index=i, image_url=image_url)
+
                 if screenshot:
                     updated_banner = BannerData(
                         dataTitle=banner['dataTitle'],
@@ -587,7 +609,10 @@ async def crawl_url(url: str) -> CrawlResult:
                         screenshotBytes=screenshot
                     )
                     valid_banners.append(updated_banner)
-                    print(f"  ✓ Captured {banner['dataTitle']} ({width}x{height}px)")
+                    status = "✓" if valid else "⚠"
+                    print(f"  {status} Captured {banner['dataTitle']} ({width}x{height}px) — valid={valid}")
+                else:
+                    print(f"  ✗ No screenshot for {banner['dataTitle']}")
             except Exception as e:
                 print(f"  ✗ Failed to capture {banner['dataTitle']}: {e}")
         
