@@ -443,7 +443,7 @@ async def collect_css(css_urls: List[str], timeout: int = 10) -> str:
     return "\n".join(css_contents)
 
 
-def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]:
+def extract_banner_html_and_images(html: str, base_url: str, debug: bool = False) -> List[BannerData]:
     """
     Extract banner HTML and associated images from carousel items.
     
@@ -460,6 +460,15 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
         List of BannerData dictionaries
     """
     banners = []
+
+    if debug:
+        # Print candidate <img> tags and their src/srcset for debugging
+        img_tags = re.findall(r'<img[^>]*>', html, re.IGNORECASE)
+        print(f"[DEBUG] Found {len(img_tags)} <img> tags (showing up to 10):")
+        for idx, tag in enumerate(img_tags[:10]):
+            src = re.search(r'src=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            srcset = re.search(r'srcset=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            print(f"  {idx+1}. src={src.group(1) if src else ''} srcset={srcset.group(1) if srcset else ''}")
     
     # Try multiple extraction strategies
     
@@ -631,6 +640,46 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
             print(f"✓ Fallback found {len(banners)} image-based banners")
         else:
             print("✗ Fallback found no candidate images")
+
+        # If still no banners, try site-heuristic detection for hero sections
+    if not banners:
+        print("⚠ Running site-heuristic scan for hero/visual/banner sections")
+        # Look for common hero class name patterns
+        hero_pattern = r'<(div|section|header)[^>]*class=["\']([^"\']*)(?:["\'][^>]*)?>'
+        for match in re.finditer(hero_pattern, html, re.IGNORECASE | re.DOTALL):
+            tag, classes = match.group(1), match.group(2)
+            if re.search(r'hero|visual|main-visual|kv|banner|top-visual|hero-banner', classes, re.IGNORECASE):
+                # extract the block around this tag (simple heuristic: grab up to next closing tag of same type)
+                start = match.start()
+                # attempt to extract inner HTML up to a reasonable length
+                snippet = html[start:start+2000]
+                # find background-image in style attribute
+                bg_match = re.search(r'background-image:\s*url\(([^)]+)\)', snippet, re.IGNORECASE)
+                img_url = None
+                if bg_match:
+                    raw = bg_match.group(1).strip('"\'')
+                    img_url = resolve_url(raw, base_url)
+                else:
+                    # try to find an <img> inside snippet
+                    img_inner = re.search(r'<img[^>]*src=["\']([^"\']+)["\']', snippet, re.IGNORECASE)
+                    if img_inner:
+                        img_url = resolve_url(img_inner.group(1), base_url)
+
+                if img_url:
+                    banners.append(BannerData(
+                        dataTitle=f"Hero Banner {len(banners)+1}",
+                        bannerHtml=snippet,
+                        imageDesktop=img_url,
+                        imageMobile="",
+                        extractedText={},
+                        width=0,
+                        height=0,
+                        screenshotBytes=None
+                    ))
+        if banners:
+            print(f"✓ Heuristic found {len(banners)} hero-like banners")
+        else:
+            print("✗ Heuristic found no hero-like banners")
 
     return banners
 
