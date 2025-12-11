@@ -582,6 +582,59 @@ def extract_banner_html_and_images(html: str, base_url: str) -> List[BannerData]
     return banners
 
 
+    # Fallback: if no banners found by carousel/picture logic, scan <img> tags
+    # and srcset entries for large/banner-like images. This helps on pages
+    # that don't use the expected carousel markup but still include hero/banner images.
+    if not banners:
+        print("⚠ No carousel/picture banners found; running <img> fallback scan")
+        img_pattern = r'<img[^>]*>'
+        for idx, img_match in enumerate(re.finditer(img_pattern, html, re.IGNORECASE)):
+            img_tag = img_match.group(0)
+            # Try to extract src and srcset
+            src_match = re.search(r'src=["\']([^"\']+)["\']', img_tag, re.IGNORECASE)
+            src = resolve_url(src_match.group(1), base_url) if src_match else ""
+
+            srcset_match = re.search(r'srcset=["\']([^"\']+)["\']', img_tag, re.IGNORECASE)
+            srcset = srcset_match.group(1) if srcset_match else ""
+
+            # Simple heuristics: include images with 'banner' in filename or srcset widths >= 1000
+            candidate = src or srcset
+            include = False
+            if src and 'banner' in src.lower():
+                include = True
+            if srcset:
+                # parse descriptors like '... 1920w'
+                parts = [p.strip() for p in srcset.split(',') if p.strip()]
+                for part in parts:
+                    m = re.search(r'(\d+)w', part)
+                    if m and int(m.group(1)) >= 1000:
+                        include = True
+                        break
+
+            # also include if filename looks large (contains 1200, 1600, 1920)
+            if src and re.search(r'\b(1200|1600|1920|1366)\b', src):
+                include = True
+
+            if include and (src or srcset):
+                banners.append(BannerData(
+                    dataTitle=f"Fallback Banner {len(banners)+1}",
+                    bannerHtml=img_tag,
+                    imageDesktop=src,
+                    imageMobile="",
+                    extractedText={},
+                    width=0,
+                    height=0,
+                    screenshotBytes=None
+                ))
+
+        if banners:
+            print(f"✓ Fallback found {len(banners)} image-based banners")
+        else:
+            print("✗ Fallback found no candidate images")
+
+    return banners
+
+
 async def crawl_url(url: str) -> CrawlResult:
     """
     Main banner crawling method - the core of the banner capture process.
