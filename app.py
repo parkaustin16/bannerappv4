@@ -12,7 +12,6 @@ import pickle
 from datetime import datetime
 import pandas as pd
 import warnings
-import asyncio
 
 # Import our utility modules
 from utils import (
@@ -98,22 +97,6 @@ def suppress_png_warnings():
     """Suppress libpng warnings about incorrect sRGB profiles."""
     warnings.filterwarnings("ignore", message=".*iCCP.*")
     warnings.filterwarnings("ignore", message=".*known incorrect sRGB profile.*")
-
-
-def load_capturev2_module():
-    """Lazy load capturev2 module to avoid import errors on startup."""
-    try:
-        from capturev2 import crawl_url
-        return crawl_url
-    except ImportError as e:
-        st.error(f"Failed to load capturev2 module: {e}")
-        st.info("Please ensure capturev2.py is in the same directory as app.py")
-        return None
-    except AttributeError as e:
-        st.error(f"Failed to import crawl_url from capturev2: {e}")
-        st.info("Please ensure capturev2.py contains the crawl_url function")
-        return None
-
 
 # --- Cached OCR Reader ---
 @st.cache_resource
@@ -214,14 +197,6 @@ def initialize_session_state():
 
         if "show_analytics" not in st.session_state:
             st.session_state.show_analytics = False
-
-        # Initialize capture mode session state
-        if "capture_mode" not in st.session_state:
-            st.session_state.capture_mode = "upload"  # "upload" or "url"
-        if "capture_url" not in st.session_state:
-            st.session_state.capture_url = ""
-        if "captured_banners" not in st.session_state:
-            st.session_state.captured_banners = None
 
         # Ensure all zone lists are actually lists
         if not isinstance(st.session_state.text_zones, list):
@@ -1408,327 +1383,113 @@ def render_sidebar():
 
 
 def render_process_mode():
-    """Render the web banner capture mode."""
-    st.header("🌐 Banner Capture from Web")
-    st.markdown("Capture and analyze banners from LG subsidiary websites")
-    
-    st.markdown("---")
+    """Render the unified image processing mode (single or multiple images)."""
+    st.header("📄 Image Processing")
 
-    # URL Capture Only
-    st.subheader("Enter Website URL")
-    
-    url_input = st.text_input(
-        "Website URL",
-        value=st.session_state.get("capture_url", ""),
-        placeholder="https://example.com",
-        help="Enter the URL of the LG subsidiary site to capture banners from",
+    # Combined upload area with file uploader functionality
+    uploaded_files = st.file_uploader(
+        "Upload Your Images",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="process_upload",
+        help="Drag and drop files here\nLimit 200MB per file • PNG, JPG, JPEG",
         label_visibility="collapsed"
     )
-    
-    if url_input:
-        st.session_state.capture_url = url_input
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🚀 Capture Banners", use_container_width=True):
-            if not url_input:
-                st.error("Please enter a URL")
-            else:
-                try:
-                    with st.spinner(f"Capturing banners from {url_input}..."):
-                        # Lazy load capturev2 module
-                        crawl_url = load_capturev2_module()
-                        if not crawl_url:
-                            st.error("Cannot proceed without capturev2 module")
-                            return
-                        
-                        # Run the async capture function
-                        result = asyncio.run(crawl_url(url_input))
-                        st.session_state.captured_banners = result
-                        
-                        if result["banners"]:
-                            st.success(f"✅ Successfully captured {len(result['banners'])} banner(s)!")
-                            
-                            # Convert captured banners to processable images
-                            st.session_state.batch_results = []
-                            ocr_reader = load_reader()
-                            st.session_state["_cached_reader"] = ocr_reader
-                            cached_batch = []
-                            
-                            for idx, banner in enumerate(result["banners"]):
-                                try:
-                                    # Banner name from capture
-                                    banner_name = banner.get("dataTitle", f"Banner {idx + 1}")
-                                    if not banner_name:
-                                        banner_name = f"Banner {idx + 1}"
-                                    
-                                    # Try to fetch and process the desktop image
-                                    if banner.get("imageDesktop"):
-                                        import aiohttp
-                                        
-                                        async def fetch_image(url):
-                                            async with aiohttp.ClientSession() as session:
-                                                async with session.get(url) as resp:
-                                                    if resp.status == 200:
-                                                        return await resp.read()
-                                            return None
-                                        
-                                        img_bytes = asyncio.run(fetch_image(banner["imageDesktop"]))
-                                        if img_bytes:
-                                            img = Image.open(io.BytesIO(img_bytes))
-                                            img = clean_png_image(img)
-                                            
-                                            # Cache image bytes
-                                            raw_buf = io.BytesIO()
-                                            img.save(raw_buf, format="PNG", optimize=True)
-                                            raw_bytes = raw_buf.getvalue()
-                                            raw_buf.close()
-                                            
-                                            st.session_state["_cached_img_bytes"] = raw_bytes
-                                            st.session_state["_cached_img_name"] = banner_name
-                                            
-                                            _ensure_per_image_zone_containers(banner_name)
-                                            cached_batch.append({"bytes": raw_bytes, "name": banner_name})
-                                            
-                                            # Process the image with OCR
-                                            result = process_image(img, ocr_reader, st.session_state.overlap_threshold, banner_name)
-                                            
-                                            # Add banner screenshot and dimensions to result
-                                            if banner.get("screenshotBytes"):
-                                                result["banner_screenshot"] = banner["screenshotBytes"]
-                                                result["banner_width"] = banner.get("width", 0)
-                                                result["banner_height"] = banner.get("height", 0)
-                                            
-                                            st.session_state.batch_results.append(result)
-                                            img.close()
-                                        else:
-                                            st.warning(f"Could not fetch image for {banner_name}")
-                                except Exception as e:
-                                    st.error(f"Error processing banner {idx + 1}: {e}")
-                            
-                            if st.session_state.batch_results:
-                                st.session_state["_cached_batch"] = cached_batch
-                                st.rerun()
-                        else:
-                            st.warning("No banners found on the website")
-                            
-                except Exception as e:
-                    st.error(f"Error capturing banners: {e}")
-                    st.info("Make sure the URL is valid and accessible")
-    
-    with col2:
-        if st.button("🔄 Clear Results", use_container_width=True):
-            st.session_state.captured_banners = None
-            st.session_state.batch_results = []
-            st.session_state.capture_url = ""
-            st.rerun()
 
-    st.markdown("---")
-    
-    if False:  # Disabled upload mode - keeping for reference
-        # Combined upload area with file uploader functionality
-        uploaded_files = st.file_uploader(
-            "Upload Your Images",
-            type=["png", "jpg", "jpeg"],
-            accept_multiple_files=True,
-            key="process_upload",
-            help="Drag and drop files here\nLimit 200MB per file • PNG, JPG, JPEG",
-            label_visibility="collapsed"
-        )
-
-        if uploaded_files:
-            # Reset zones to defaults per new upload set (but keep in-session edits until the new upload occurs)
+    if uploaded_files:
+        # Reset zones to defaults per new upload set (but keep in-session edits until the new upload occurs)
+        try:
+            current_sig = tuple(sorted(f.name for f in uploaded_files))
+        except Exception:
+            current_sig = None
+        if current_sig and st.session_state._last_upload_signatures != current_sig:
+            st.session_state.text_zones = list(st.session_state.text_zones_default)
+            st.session_state.ignore_zones = load_json_cached(IGNORE_ZONES_FILE, [])
+            # reset per-image stores for the new batch
+            st.session_state.zones_by_image = {}
+            st.session_state.ignore_zones_by_image = {}
+            st.session_state._last_upload_signatures = current_sig
+            st.session_state._is_single_upload = (len(current_sig) == 1)
+            # clear previous cached image when a new set is uploaded
+            st.session_state._cached_img_bytes = None
+            st.session_state._cached_img_name = None
             try:
-                current_sig = tuple(sorted(f.name for f in uploaded_files))
+                first_name = uploaded_files[0].name
+                st.session_state["_pending_edit_image"] = first_name
             except Exception:
-                current_sig = None
-            if current_sig and st.session_state._last_upload_signatures != current_sig:
-                st.session_state.text_zones = list(st.session_state.text_zones_default)
-                st.session_state.ignore_zones = load_json_cached(IGNORE_ZONES_FILE, [])
-                # reset per-image stores for the new batch
-                st.session_state.zones_by_image = {}
-                st.session_state.ignore_zones_by_image = {}
-                st.session_state._last_upload_signatures = current_sig
-                st.session_state._is_single_upload = (len(current_sig) == 1)
-                # clear previous cached image when a new set is uploaded
-                st.session_state._cached_img_bytes = None
-                st.session_state._cached_img_name = None
+                pass
+
+        # Auto-process images when uploaded
+        if len(uploaded_files) != len(st.session_state.batch_results) or not st.session_state.batch_results:
+            st.session_state.batch_results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # Load OCR reader once
+            ocr_reader = load_reader()
+            # cache reader for quick redraws
+            st.session_state["_cached_reader"] = ocr_reader
+            # prepare cache list for batch redraws
+            cached_batch = []
+
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing {uploaded_file.name}...")
+
                 try:
-                    first_name = uploaded_files[0].name
-                    st.session_state["_pending_edit_image"] = first_name
-                except Exception:
-                    pass
-
-            # Auto-process images when uploaded
-            if len(uploaded_files) != len(st.session_state.batch_results) or not st.session_state.batch_results:
-                st.session_state.batch_results = []
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
-                # Load OCR reader once
-                ocr_reader = load_reader()
-                # cache reader for quick redraws
-                st.session_state["_cached_reader"] = ocr_reader
-                # prepare cache list for batch redraws
-                cached_batch = []
-
-                for i, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Processing {uploaded_file.name}...")
-
+                    # Open and clean the image to remove problematic color profiles
+                    img = Image.open(uploaded_file)
+                    img = clean_png_image(img)
+                    
+                    # cache original bytes for redraws
+                    raw_buf = io.BytesIO()
                     try:
-                        # Open and clean the image to remove problematic color profiles
-                        img = Image.open(uploaded_file)
-                        img = clean_png_image(img)
-                        
-                        # cache original bytes for redraws
-                        raw_buf = io.BytesIO()
-                        try:
-                            img.save(raw_buf, format="PNG", optimize=True)
-                            raw_bytes = raw_buf.getvalue()
-                        finally:
-                            raw_buf.close()
-                        
-                        st.session_state["_cached_img_bytes"] = raw_bytes
-                        st.session_state["_cached_img_name"] = uploaded_file.name
-                        # do not mutate dropdown-bound key in the same run; defer
-                        if "_pending_edit_image" not in st.session_state:
-                            st.session_state["_pending_edit_image"] = uploaded_file.name
-                        # ensure per-image containers exist seeded from current defaults
-                        _ensure_per_image_zone_containers(uploaded_file.name)
-                        cached_batch.append({"bytes": raw_bytes, "name": uploaded_file.name})
-                        result = process_image(img, ocr_reader, st.session_state.overlap_threshold, uploaded_file.name)
-                        st.session_state.batch_results.append(result)
-                        # Clean up PIL Image object
-                        img.close()
-                    except Exception as e:
-                        st.error(f"Error processing {uploaded_file.name}: {e}")
-                        # Ensure cleanup even on error
-                        try:
-                            img.close()
-                        except (NameError, AttributeError):
-                            # img might not be defined if error occurred before assignment
-                            pass
-                        except Exception as cleanup_error:
-                            # Don't show cleanup errors to user
-                            pass
-
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-
-                # store batch cache for redraws
-                st.session_state["_cached_batch"] = cached_batch
-                # Clean up memory after processing
-                cleanup_cache()
-                status_text.text("✅ Processing complete!")
-                st.success(f"Processed {len(st.session_state.batch_results)} image(s)")
-                
-                # Immediately update the drawing to show numbered labels
-                try:
-                    _reprocess_from_cache()
-                except (ValueError, TypeError) as e:
-                    st.warning(f"Could not update drawing immediately: {e}")
-                except (OSError, IOError) as e:
-                    st.warning(f"File/IO error during drawing update: {e}")
+                        img.save(raw_buf, format="PNG", optimize=True)
+                        raw_bytes = raw_buf.getvalue()
+                    finally:
+                        raw_buf.close()
+                    
+                    st.session_state["_cached_img_bytes"] = raw_bytes
+                    st.session_state["_cached_img_name"] = uploaded_file.name
+                    # do not mutate dropdown-bound key in the same run; defer
+                    if "_pending_edit_image" not in st.session_state:
+                        st.session_state["_pending_edit_image"] = uploaded_file.name
+                    # ensure per-image containers exist seeded from current defaults
+                    _ensure_per_image_zone_containers(uploaded_file.name)
+                    cached_batch.append({"bytes": raw_bytes, "name": uploaded_file.name})
+                    result = process_image(img, ocr_reader, st.session_state.overlap_threshold, uploaded_file.name)
+                    st.session_state.batch_results.append(result)
+                    # Clean up PIL Image object
+                    img.close()
                 except Exception as e:
-                    st.warning(f"Unexpected error during drawing update: {e}")
-        st.subheader("🌐 Capture Banners from URL")
-        
-        url_input = st.text_input(
-            "Enter website URL",
-            value=st.session_state.capture_url,
-            placeholder="https://example.com",
-            help="Enter the URL of the LG subsidiary site to capture banners from"
-        )
-        
-        if url_input:
-            st.session_state.capture_url = url_input
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🚀 Capture Banners", use_container_width=True):
-                if not url_input:
-                    st.error("Please enter a URL")
-                else:
+                    st.error(f"Error processing {uploaded_file.name}: {e}")
+                    # Ensure cleanup even on error
                     try:
-                        with st.spinner(f"Capturing banners from {url_input}..."):
-                            # Lazy load capturev2 module
-                            crawl_url = load_capturev2_module()
-                            if not crawl_url:
-                                st.error("Cannot proceed without capturev2 module")
-                                return
-                            
-                            # Run the async capture function
-                            result = asyncio.run(crawl_url(url_input))
-                            st.session_state.captured_banners = result
-                            
-                            if result["banners"]:
-                                st.success(f"✅ Successfully captured {len(result['banners'])} banner(s)!")
-                                
-                                # Convert captured banners to processable images
-                                st.session_state.batch_results = []
-                                ocr_reader = load_reader()
-                                st.session_state["_cached_reader"] = ocr_reader
-                                cached_batch = []
-                                
-                                for idx, banner in enumerate(result["banners"]):
-                                    try:
-                                        # For now, we'll use placeholder names
-                                        banner_name = banner.get("dataTitle", f"Banner {idx + 1}")
-                                        if not banner_name:
-                                            banner_name = f"Banner {idx + 1}"
-                                        
-                                        # Try to fetch and process the desktop image
-                                        if banner.get("imageDesktop"):
-                                            import aiohttp
-                                            
-                                            async def fetch_image(url):
-                                                async with aiohttp.ClientSession() as session:
-                                                    async with session.get(url) as resp:
-                                                        if resp.status == 200:
-                                                            return await resp.read()
-                                                return None
-                                            
-                                            img_bytes = asyncio.run(fetch_image(banner["imageDesktop"]))
-                                            if img_bytes:
-                                                img = Image.open(io.BytesIO(img_bytes))
-                                                img = clean_png_image(img)
-                                                
-                                                # Cache image bytes
-                                                raw_buf = io.BytesIO()
-                                                img.save(raw_buf, format="PNG", optimize=True)
-                                                raw_bytes = raw_buf.getvalue()
-                                                raw_buf.close()
-                                                
-                                                st.session_state["_cached_img_bytes"] = raw_bytes
-                                                st.session_state["_cached_img_name"] = banner_name
-                                                
-                                                _ensure_per_image_zone_containers(banner_name)
-                                                cached_batch.append({"bytes": raw_bytes, "name": banner_name})
-                                                
-                                                # Process the image
-                                                result = process_image(img, ocr_reader, st.session_state.overlap_threshold, banner_name)
-                                                st.session_state.batch_results.append(result)
-                                                img.close()
-                                            else:
-                                                st.warning(f"Could not fetch image for {banner_name}")
-                                    except Exception as e:
-                                        st.error(f"Error processing banner {idx + 1}: {e}")
-                                
-                                if st.session_state.batch_results:
-                                    st.session_state["_cached_batch"] = cached_batch
-                                    st.rerun()
-                            else:
-                                st.warning("No banners found on the website")
-                                
-                    except Exception as e:
-                        st.error(f"Error capturing banners: {e}")
-                        st.info("Make sure the URL is valid and accessible")
-        
-        with col2:
-            if st.button("🔄 Clear Results", use_container_width=True):
-                st.session_state.captured_banners = None
-                st.session_state.batch_results = []
-                st.session_state.capture_url = ""
-                st.rerun()
+                        img.close()
+                    except (NameError, AttributeError):
+                        # img might not be defined if error occurred before assignment
+                        pass
+                    except Exception as cleanup_error:
+                        # Don't show cleanup errors to user
+                        pass
+
+                progress_bar.progress((i + 1) / len(uploaded_files))
+
+            # store batch cache for redraws
+            st.session_state["_cached_batch"] = cached_batch
+            # Clean up memory after processing
+            cleanup_cache()
+            status_text.text("✅ Processing complete!")
+            st.success(f"Processed {len(st.session_state.batch_results)} image(s)")
+            
+            # Immediately update the drawing to show numbered labels
+            try:
+                _reprocess_from_cache()
+            except (ValueError, TypeError) as e:
+                st.warning(f"Could not update drawing immediately: {e}")
+            except (OSError, IOError) as e:
+                st.warning(f"File/IO error during drawing update: {e}")
+            except Exception as e:
+                st.warning(f"Unexpected error during drawing update: {e}")
 
     # Display results
     if st.session_state.batch_results:
@@ -1753,14 +1514,6 @@ def render_process_mode():
                 _ensure_per_image_zone_containers(result["filename"]) 
                 if "_pending_edit_image" not in st.session_state:
                     st.session_state["_pending_edit_image"] = result["filename"]
-
-            # Display banner screenshot with dimensions
-            if result.get("banner_screenshot"):
-                st.subheader("🖼️ Banner Screenshot")
-                st.info(f"Dimensions: {result.get('banner_width', 'N/A')} x {result.get('banner_height', 'N/A')} pixels")
-                st.image(result["banner_screenshot"], use_container_width=True, 
-                        caption=f"Captured banner with all content ({result.get('banner_width', 'N/A')}x{result.get('banner_height', 'N/A')})")
-
 
             # Display penalties
             if result["penalties"]:
@@ -2066,4 +1819,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
